@@ -111,14 +111,14 @@ def _send_reset_email(to_email: str, token: str):
             logger.info("Password reset email sent to %s", to_email)
         except Exception as exc:
             logger.warning("Failed to send reset email: %s", exc)
-            logger.info("PASSWORD RESET TOKEN for %s: %s", to_email, token)
-            logger.info("Reset URL: %s", reset_url)
+            logger.warning("PASSWORD RESET TOKEN for %s: %s", to_email, token)
+            logger.warning("Reset URL: %s", reset_url)
     else:
         # No SMTP configured — log to console (useful in dev / VPS without mail server)
-        logger.info("=" * 60)
-        logger.info("PASSWORD RESET TOKEN for %s", to_email)
-        logger.info("Reset URL: %s", reset_url)
-        logger.info("=" * 60)
+        logger.warning("=" * 60)
+        logger.warning("PASSWORD RESET TOKEN for %s", to_email)
+        logger.warning("Reset URL: %s", reset_url)
+        logger.warning("=" * 60)
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
