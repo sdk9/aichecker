@@ -19,6 +19,7 @@ httpx==0.28.1
 sqlalchemy==2.0.36
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+bcrypt==3.2.2
 # Payments
 stripe==11.3.0
 # ML-based detection (CPU-only torch)
