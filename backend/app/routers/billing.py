@@ -29,9 +29,9 @@ PLANS = [
         "price": 0,
         "currency": "usd",
         "interval": None,
-        "scans_per_day": 10,
+        "scans_per_day": 1,
         "features": [
-            "10 scans / day",
+            "1 scan / day",
             "Images, documents, audio",
             "PDF evidence report",
             "Neural network classifiers",
@@ -42,12 +42,12 @@ PLANS = [
     {
         "id": "pro",
         "name": "Pro",
-        "price": 1900,  # cents
+        "price": 499,  # cents
         "currency": "usd",
         "interval": "month",
-        "scans_per_day": 500,
+        "scans_per_day": 9999,
         "features": [
-            "500 scans / day",
+            "Unlimited scans",
             "All file types + video",
             "Priority processing",
             "PDF evidence report",
@@ -56,26 +56,6 @@ PLANS = [
         ],
         "stripe_price_id": os.getenv("STRIPE_PRO_PRICE_ID", ""),
         "cta": "Upgrade to Pro",
-    },
-    {
-        "id": "enterprise",
-        "name": "Enterprise",
-        "price": 9900,  # cents
-        "currency": "usd",
-        "interval": "month",
-        "scans_per_day": 9999,
-        "features": [
-            "Unlimited scans",
-            "All file types",
-            "Bulk API for pipelines",
-            "Priority processing",
-            "PDF evidence report",
-            "Neural network classifiers",
-            "Dedicated support",
-            "Custom integrations",
-        ],
-        "stripe_price_id": os.getenv("STRIPE_ENTERPRISE_PRICE_ID", ""),
-        "cta": "Contact Sales",
     },
 ]
 

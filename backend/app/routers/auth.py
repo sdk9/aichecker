@@ -24,7 +24,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 bearer = HTTPBearer(auto_error=False)
 
 # ── Plan limits ───────────────────────────────────────────────────────────────
-PLAN_DAILY_LIMITS = {"free": 10, "pro": 500, "enterprise": 9999}
+PLAN_DAILY_LIMITS = {"free": 1, "pro": 9999, "enterprise": 9999}
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -194,7 +194,7 @@ def reset_password(body: ResetPasswordRequest, db: Session = Depends(get_db)):
 # ── Utility ───────────────────────────────────────────────────────────────────
 
 def _user_out(user: User) -> dict:
-    limit = PLAN_DAILY_LIMITS.get(user.plan, 10)
+    limit = PLAN_DAILY_LIMITS.get(user.plan, 1)
     return {
         "id": user.id,
         "email": user.email,
