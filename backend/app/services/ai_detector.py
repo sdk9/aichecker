@@ -7,12 +7,12 @@ Detection layers (in order of reliability):
 
 Weights when ML is available:
   Images    — ML 60 % + heuristics 40 %
-  Documents — ML 55 % + heuristics 45 %
+  Documents — RoBERTa 15 % + GPT-2 perplexity 20 % + heuristics 65 %
   Audio     — metadata 30 % + format 25 % + spectral 45 %
 
 Weights when ML is NOT available (torch not installed):
   Images    — ELA 28 % + EXIF 18 % + Noise 22 % + Freq 16 % + Color 9 % + Texture 7 %
-  Documents — Burstiness 28 % + Phrases 25 % + Vocab 22 % + Para-homogeneity 14 % + Self-similarity 11 %
+  Documents — Template 25 % + Buzzwords 22 % + Burstiness 14 % + Vocab 12 % + Phrases 15 % + Para 7 % + Similarity 5 %
 """
 
 import io
@@ -231,17 +231,38 @@ def _ml_text_signal(
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def analyze_audio(file_path: Path) -> Tuple[float, List[DetectionSignal]]:
-    """Returns (ai_probability, signals)."""
+    """Returns (ai_probability, signals).
+
+    Five-signal pipeline:
+      1. AI tool binary/tag scan  — highest confidence when it hits
+      2. Metadata completeness     — AI tools skip proper tagging
+      3. Format heuristics         — sample rate, duration patterns
+      4. Spectral consistency      — ffmpeg-decoded, works on MP3/AAC
+      5. Dynamic range             — AI music is hyper-compressed
+    """
     signals: List[DetectionSignal] = []
 
-    meta_score,    meta_sig    = _audio_metadata_check(file_path)
-    fmt_score,     fmt_sig     = _audio_format_check(file_path)
+    tool_score,     tool_sig     = _audio_ai_tool_scan(file_path)
+    meta_score,     meta_sig     = _audio_metadata_check(file_path)
+    fmt_score,      fmt_sig      = _audio_format_check(file_path)
     spectral_score, spectral_sig = _audio_spectral_analysis(file_path)
+    dynamic_score,  dynamic_sig  = _audio_dynamic_range(file_path)
 
-    signals += [meta_sig, fmt_sig, spectral_sig]
+    signals += [tool_sig, meta_sig, fmt_sig, spectral_sig, dynamic_sig]
 
-    # spectral analysis gets the most weight — most diagnostic
-    ai_prob = meta_score * 0.30 + fmt_score * 0.25 + spectral_score * 0.45
+    ai_prob = (
+        tool_score     * 0.30 +
+        meta_score     * 0.18 +
+        fmt_score      * 0.15 +
+        spectral_score * 0.22 +
+        dynamic_score  * 0.15
+    )
+    # Hard floor when AI tool is positively identified
+    if tool_score >= 0.75:
+        ai_prob = max(ai_prob, 0.75)
+    elif tool_score >= 0.50:
+        ai_prob = max(ai_prob, 0.50)
+
     return float(min(max(ai_prob, 0.0), 1.0)), signals
 
 
@@ -786,7 +807,12 @@ def _transition_phrases(text: str) -> Tuple[float, DetectionSignal]:
 
 def _paragraph_homogeneity(text: str) -> Tuple[float, DetectionSignal]:
     """AI tends to write paragraphs of very similar length."""
+    # Try double-newline paragraphs first; fall back to single-newline blocks
+    # so structured docs (CVs, reports) that use \n instead of \n\n still work.
     paragraphs = [p.strip() for p in text.split("\n\n") if len(p.strip().split()) > 10]
+    if len(paragraphs) < 3:
+        # Single-newline fallback for CVs and structured docs (bullet points are shorter)
+        paragraphs = [p.strip() for p in text.split("\n") if len(p.strip().split()) > 5]
     if len(paragraphs) < 3:
         return 0.3, DetectionSignal(
             name="Paragraph Homogeneity",
@@ -969,6 +995,8 @@ def _professional_buzzwords(text: str) -> Tuple[float, DetectionSignal]:
     Detect high-density professional buzzwords that AI models overuse
     in CVs, cover letters, and business documents.
     """
+    # Note: terms already in AI_TRANSITIONS are intentionally omitted here
+    # to avoid double-counting the same signal across both checks.
     BUZZWORDS = [
         "results-driven", "results driven", "detail-oriented", "detail oriented",
         "quick learner", "fast learner", "proven track record",
@@ -979,17 +1007,17 @@ def _professional_buzzwords(text: str) -> Tuple[float, DetectionSignal]:
         "ensuring confidentiality", "data accuracy",
         "strong communication", "excellent communication",
         "analytical thinking", "problem-solving",
-        "cross-functional", "stakeholder", "synergize",
-        "actionable insights", "best practices",
-        "continuous improvement", "proactive",
-        "comprehensive understanding", "demonstrated ability",
+        "actionable insights",
+        "demonstrated ability",
         "dynamic professional", "innovative solutions",
         "strategic thinking", "driving results",
-        "streamline", "cutting-edge", "holistic approach",
-        "transformative", "empower", "spearhead",
+        "holistic approach",
         "leveraging", "value-added", "collaborative environment",
         "attention to detail", "time management",
         "communication skills", "teamwork",
+        "go-getter", "outside the box", "think outside",
+        "hard-working", "hardworking", "reliable professional",
+        "exceed expectations", "above and beyond",
     ]
     lower = text.lower()
     word_count = max(len(text.split()), 1)
@@ -1028,45 +1056,182 @@ def _professional_buzzwords(text: str) -> Tuple[float, DetectionSignal]:
 # AUDIO HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Known AI audio/music generation tool name fragments (lowercase bytes for binary scan)
+_AI_AUDIO_TOOL_MARKERS = [
+    # Music generation platforms
+    b"suno", b"udio", b"stable audio", b"musicgen", b"audiogen",
+    b"mubert", b"aiva", b"soundraw", b"boomy", b"loudly",
+    b"beatoven", b"riffusion", b"musiclm", b"jukebox", b"musicfy",
+    b"soundful", b"ecrett", b"amper",
+    # Voice / TTS
+    b"elevenlabs", b"eleven labs", b"bark tts", b"vall-e",
+    b"tortoisetts", b"coqui", b"playht", b"play.ht",
+    b"resemble.ai", b"descript", b"speechify", b"voicify",
+    # Generic AI tag markers
+    b"generated by ai", b"ai generated", b"ai-generated",
+    b"created by ai", b"ai music", b"created with ai",
+]
+
+
+def _audio_ai_tool_scan(file_path: Path) -> Tuple[float, DetectionSignal]:
+    """
+    Binary scan of the file + full metadata tag scan for known AI
+    music / TTS generation tool markers.
+
+    This is the highest-confidence signal: a match is near-definitive.
+    """
+    found_binary: List[str] = []
+    found_tags: List[str] = []
+
+    # ── Binary scan (first 64 KB + last 8 KB) ─────────────────────────────
+    try:
+        size = file_path.stat().st_size
+        with open(file_path, "rb") as f:
+            head = f.read(min(65536, size))
+            tail = b""
+            if size > 65536:
+                f.seek(max(0, size - 8192))
+                tail = f.read(8192)
+        blob = (head + tail).lower()
+        for marker in _AI_AUDIO_TOOL_MARKERS:
+            if marker in blob:
+                found_binary.append(marker.decode("utf-8", errors="ignore"))
+    except Exception:
+        pass
+
+    # ── Full metadata tag scan ─────────────────────────────────────────────
+    try:
+        from mutagen import File as MutagenFile
+        from app.services.metadata import _flag_software
+        audio = MutagenFile(file_path)
+        if audio and audio.tags:
+            tag_text = " ".join(str(v) for v in audio.tags.values()).lower()
+            for marker in _AI_AUDIO_TOOL_MARKERS:
+                m = marker.decode("utf-8", errors="ignore")
+                if m in tag_text and m not in found_tags:
+                    found_tags.append(m)
+            # Also run the generic software-flag check on encoder fields
+            for k in ("TSSE", "TENC", "encoder", "encoded_by", "comment", "COMM"):
+                if k in audio.tags:
+                    val = str(audio.tags[k])
+                    susp, _note = _flag_software(val)
+                    if susp:
+                        entry = f"{k}={val[:60]}"
+                        if entry not in found_tags:
+                            found_tags.append(entry)
+    except Exception:
+        pass
+
+    all_found = list(dict.fromkeys(found_binary + found_tags))  # deduplicate, keep order
+
+    if all_found:
+        score, severity = 0.95, SignalSeverity.HIGH
+        desc = (
+            f"Known AI audio generation tool detected: {', '.join(all_found[:4])}. "
+            "This is a near-definitive indicator of AI-generated audio."
+        )
+    else:
+        score, severity = 0.20, SignalSeverity.LOW
+        desc = "No known AI audio generation tool markers found in file binary or metadata."
+
+    return score, DetectionSignal(
+        name="AI Audio Tool Detection",
+        description=desc,
+        severity=severity,
+        score=score,
+        details=f"Binary hits: {found_binary or 'none'} | Tag hits: {found_tags or 'none'}",
+    )
+
+
 def _audio_metadata_check(file_path: Path) -> Tuple[float, DetectionSignal]:
+    """
+    Checks metadata *completeness* for a music file.
+
+    AI music platforms typically export tracks with missing or minimal tags
+    (no artist, no album, no genre, no year).  A real studio track always
+    has at least artist + title.  Missing 3+ of the 5 key fields is a strong
+    signal.  Also scans comment/description text for AI-related language.
+    """
     try:
         from mutagen import File as MutagenFile
         audio = MutagenFile(file_path)
         if audio is None:
-            return 0.50, DetectionSignal(
-                name="Audio Metadata",
-                description="Could not parse audio file.",
-                severity=SignalSeverity.LOW,
-                score=0.50,
-            )
-
-        if not audio.tags:
             return 0.55, DetectionSignal(
-                name="Audio Metadata Absent",
-                description="No ID3 / metadata tags found. Synthetic audio files often lack tagging.",
+                name="Audio Metadata",
+                description="Could not parse audio file metadata.",
                 severity=SignalSeverity.MEDIUM,
                 score=0.55,
             )
 
-        for k in ["TSSE", "TENC", "encoder", "encoded_by"]:
-            if k in audio:
-                enc = str(audio[k])
-                from app.services.metadata import _flag_software
-                susp, note = _flag_software(enc)
-                if susp:
-                    return 0.88, DetectionSignal(
-                        name="AI Audio Tool Detected",
-                        description=f"Encoder field references known AI tool: '{enc}'",
-                        severity=SignalSeverity.HIGH,
-                        score=0.88,
-                        details=note,
-                    )
+        if not audio.tags:
+            return 0.68, DetectionSignal(
+                name="Audio Metadata Absent",
+                description=(
+                    "No metadata tags found. Professional music always carries at least "
+                    "artist and title tags; AI music tools frequently skip tagging."
+                ),
+                severity=SignalSeverity.HIGH,
+                score=0.68,
+            )
 
-        return 0.18, DetectionSignal(
-            name="Audio Metadata Present",
-            description="Standard audio metadata found. No AI tool markers detected.",
-            severity=SignalSeverity.LOW,
-            score=0.18,
+        tags = audio.tags
+
+        def _has_field(*keys: str) -> bool:
+            for k in keys:
+                for tag_key in tags.keys():
+                    if k.lower() in str(tag_key).lower():
+                        val = str(tags[tag_key]).strip()
+                        if val and val not in ("", "0", "unknown", "none"):
+                            return True
+            return False
+
+        has_artist = _has_field("artist", "TPE1", "TPE2", "author")
+        has_title  = _has_field("title",  "TIT2", "TIT1")
+        has_album  = _has_field("album",  "TALB")
+        has_year   = _has_field("year",   "date", "TDRC", "TYER")
+        has_genre  = _has_field("genre",  "TCON")
+
+        missing = sum([not has_artist, not has_title, not has_album, not has_year, not has_genre])
+
+        # Scan all tag text for AI-related language
+        tag_text = " ".join(str(v) for v in tags.values()).lower()
+        ai_lang  = ["generated", "ai ", "artificial", "synthetic", "suno", "udio",
+                    "prompt:", "style:", "created with", "instrumental"]
+        comment_suspicious = any(p in tag_text for p in ai_lang)
+
+        field_str = (
+            f"artist={'✓' if has_artist else '✗'} "
+            f"title={'✓' if has_title else '✗'} "
+            f"album={'✓' if has_album else '✗'} "
+            f"year={'✓' if has_year else '✗'} "
+            f"genre={'✓' if has_genre else '✗'}"
+        )
+
+        if missing >= 4 or (missing >= 3 and comment_suspicious):
+            score, severity = 0.75, SignalSeverity.HIGH
+            desc = (
+                f"Severely incomplete metadata ({missing}/5 key fields missing). "
+                f"{field_str}. AI-generated audio rarely carries full music metadata."
+            )
+        elif missing >= 3:
+            score, severity = 0.58, SignalSeverity.MEDIUM
+            desc = f"Incomplete metadata ({missing}/5 fields missing). {field_str}."
+        elif missing >= 2 or comment_suspicious:
+            score, severity = 0.42, SignalSeverity.MEDIUM
+            if comment_suspicious:
+                desc = f"Metadata contains AI-related language. {field_str}."
+            else:
+                desc = f"Partial metadata ({missing}/5 fields missing). {field_str}."
+        else:
+            score, severity = 0.12, SignalSeverity.LOW
+            desc = f"Complete music metadata present. {field_str}."
+
+        return score, DetectionSignal(
+            name="Audio Metadata Completeness",
+            description=desc,
+            severity=severity,
+            score=score,
+            details=field_str,
         )
     except Exception as exc:
         return 0.40, DetectionSignal(
@@ -1078,7 +1243,13 @@ def _audio_metadata_check(file_path: Path) -> Tuple[float, DetectionSignal]:
 
 
 def _audio_format_check(file_path: Path) -> Tuple[float, DetectionSignal]:
-    """Sample rate and bitrate heuristics for TTS detection."""
+    """
+    Format heuristics: sample rate, duration, bitrate, channel count.
+
+    Key insight: TTS tools use 16/22/24 kHz; AI *music* tools (Suno, Udio)
+    export at 44100/48000 Hz — so sample rate alone is insufficient.
+    We therefore score a combination of factors.
+    """
     try:
         from mutagen import File as MutagenFile
         audio = MutagenFile(file_path)
@@ -1089,29 +1260,57 @@ def _audio_format_check(file_path: Path) -> Tuple[float, DetectionSignal]:
                 severity=SignalSeverity.LOW,
                 score=0.40,
             )
+
         info     = audio.info
-        duration = getattr(info, "length", 0)
-        bitrate  = getattr(info, "bitrate", 0)
+        duration = getattr(info, "length",      0)
+        bitrate  = getattr(info, "bitrate",     0)
         sr       = getattr(info, "sample_rate", 0)
+        channels = getattr(info, "channels",    0)
 
-        suspicious_sr = sr in (16000, 22050, 24000)  # common TTS output rates
+        suspicion = 0.0
+        flags: List[str] = []
 
-        if suspicious_sr and duration < 30:
-            score, severity = 0.65, SignalSeverity.MEDIUM
-            desc = f"Sample rate {sr} Hz + short duration ({duration:.1f}s) — common in TTS synthesis."
-        elif suspicious_sr:
-            score, severity = 0.42, SignalSeverity.MEDIUM
-            desc = f"Sample rate {sr} Hz is standard for speech synthesis models (ElevenLabs, Bark, etc.)."
+        # TTS-typical sample rates
+        if sr in (16000, 22050, 24000):
+            suspicion += 0.35
+            flags.append(f"TTS sample rate ({sr} Hz)")
+
+        # Very short — TTS demo or AI preview
+        if 0 < duration < 15:
+            suspicion += 0.22
+            flags.append(f"Short duration ({duration:.1f}s)")
+
+        # AI generation platforms often cap at exact multiples of 30s / 60s
+        if duration > 0 and abs(duration - round(duration)) < 0.08 and round(duration) % 30 == 0:
+            suspicion += 0.15
+            flags.append(f"Exact duration ({duration:.0f}s — common AI generation limit)")
+
+        # Mono + TTS sample rate
+        if channels == 1 and sr in (16000, 22050, 24000):
+            suspicion += 0.18
+            flags.append("Mono + TTS sample rate")
+
+        score = min(suspicion, 0.85) if flags else 0.15
+
+        if score >= 0.55:
+            severity = SignalSeverity.HIGH
+            desc = f"Audio format strongly consistent with AI synthesis: {'; '.join(flags)}."
+        elif score >= 0.28:
+            severity = SignalSeverity.MEDIUM
+            desc = f"Suspicious format properties: {'; '.join(flags)}."
         else:
-            score, severity = 0.18, SignalSeverity.LOW
-            desc = f"Sample rate {sr} Hz and bitrate {bitrate} bps are consistent with natural audio."
+            severity = SignalSeverity.LOW
+            desc = (
+                f"Normal audio format (SR={sr} Hz, {duration:.1f}s, "
+                f"{bitrate // 1000 if bitrate else '?'}kbps). No AI format markers."
+            )
 
         return score, DetectionSignal(
             name="Audio Format Properties",
             description=desc,
             severity=severity,
             score=score,
-            details=f"Duration={duration:.1f}s | SR={sr} Hz | Bitrate={bitrate} bps",
+            details=f"Duration={duration:.1f}s | SR={sr} Hz | Bitrate={bitrate} bps | Channels={channels}",
         )
     except Exception as exc:
         return 0.40, DetectionSignal(
@@ -1122,25 +1321,75 @@ def _audio_format_check(file_path: Path) -> Tuple[float, DetectionSignal]:
         )
 
 
-def _audio_spectral_analysis(file_path: Path) -> Tuple[float, DetectionSignal]:
+def _decode_audio_float32(file_path: Path):
     """
-    Frame-level spectral consistency analysis using soundfile + scipy.
+    Decode any audio file to float32 mono numpy array.
 
-    TTS synthesis produces audio with:
-      - Unnaturally consistent zero-crossing rate across frames
-      - Low variance in short-term energy envelope
-      - Abnormally stable spectral centroid
+    Strategy:
+      1. Try soundfile (fast; handles WAV, FLAC, OGG but NOT MP3/AAC).
+      2. Fall back to ffmpeg subprocess for compressed formats.
 
-    Natural speech/music varies much more in all three dimensions.
+    Returns (data: np.ndarray | None, sample_rate: int).
     """
+    import numpy as np
+
+    # ── soundfile (fast path) ──────────────────────────────────────────────
     try:
         import soundfile as sf
-        import numpy as np
-
         data, sr = sf.read(str(file_path), always_2d=False)
         if data.ndim > 1:
             data = data.mean(axis=1)
-        data = data.astype(np.float32)
+        return data.astype(np.float32), int(sr)
+    except Exception:
+        pass
+
+    # ── ffmpeg subprocess (handles MP3, AAC, M4A, …) ──────────────────────
+    try:
+        import subprocess
+        result = subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error",
+                "-i", str(file_path),
+                "-ac", "1",        # mono
+                "-ar", "22050",    # 22 kHz — sufficient for our analysis
+                "-f", "f32le",     # raw float32 little-endian PCM
+                "pipe:1",
+            ],
+            capture_output=True,
+            timeout=45,
+        )
+        if result.returncode == 0 and result.stdout:
+            data = np.frombuffer(result.stdout, dtype=np.float32).copy()
+            return data, 22050
+    except Exception:
+        pass
+
+    return None, 0
+
+
+def _audio_spectral_analysis(file_path: Path) -> Tuple[float, DetectionSignal]:
+    """
+    Frame-level spectral consistency analysis — now works on MP3/AAC via ffmpeg.
+
+    AI-generated audio (both TTS and AI music) tends to exhibit:
+      - Unnaturally low variance in zero-crossing rate across frames
+      - Very stable short-term energy envelope
+      - Abnormally consistent spectral centroid
+
+    Natural recordings vary considerably in all three dimensions.
+    """
+    import numpy as np
+
+    try:
+        data, sr = _decode_audio_float32(file_path)
+        if data is None or len(data) == 0:
+            return 0.45, DetectionSignal(
+                name="Audio Spectral Analysis",
+                description="Could not decode audio for spectral analysis.",
+                severity=SignalSeverity.LOW,
+                score=0.45,
+            )
+
         max_val = np.abs(data).max()
         if max_val > 0:
             data /= max_val
@@ -1149,56 +1398,66 @@ def _audio_spectral_analysis(file_path: Path) -> Tuple[float, DetectionSignal]:
         hop_size   = max(int(sr * 0.010), 32)    # 10 ms
 
         if len(data) < frame_size * 10:
-            return 0.38, DetectionSignal(
+            return 0.40, DetectionSignal(
                 name="Audio Spectral Analysis",
                 description="Audio too short for spectral analysis.",
                 severity=SignalSeverity.LOW,
-                score=0.38,
+                score=0.40,
             )
 
+        # Analyse up to 30 s worth of frames for efficiency
+        max_frames  = int(30 * sr / hop_size)
+        window      = np.hanning(frame_size)
+        freqs       = np.fft.rfftfreq(frame_size, d=1.0 / sr)
         zcr_vals, energy_vals, centroid_vals = [], [], []
-        freqs = np.fft.rfftfreq(frame_size, d=1.0 / sr)
 
+        frame_count = 0
         for i in range(0, len(data) - frame_size, hop_size):
-            frame = data[i:i + frame_size]
-            # Zero-crossing rate
+            if frame_count >= max_frames:
+                break
+            frame = data[i: i + frame_size]
             zcr_vals.append(float(np.mean(np.diff(np.sign(frame)) != 0)))
-            # RMS energy
             energy_vals.append(float(np.sqrt(np.mean(frame ** 2))))
-            # Spectral centroid
-            mag = np.abs(np.fft.rfft(frame * np.hanning(frame_size)))
+            mag   = np.abs(np.fft.rfft(frame * window))
             total = mag.sum()
             centroid_vals.append(float((freqs * mag).sum() / (total + 1e-9)))
+            frame_count += 1
 
-        def _cv(vals):
+        def _cv(vals: list) -> float:
             a = np.array(vals)
             return float(a.std() / (a.mean() + 1e-9))
 
         zcr_cv      = _cv(zcr_vals)
         energy_cv   = _cv(energy_vals)
         centroid_cv = _cv(centroid_vals)
-
-        # Composite consistency score (low = too regular = AI-like)
         consistency = (zcr_cv + energy_cv + centroid_cv) / 3.0
 
-        if consistency < 0.35:
-            score, severity = 0.80, SignalSeverity.HIGH
+        # Tighter thresholds — AI music is more dynamic than TTS but still
+        # more homogeneous than organic recordings
+        if consistency < 0.30:
+            score, severity = 0.85, SignalSeverity.HIGH
             desc = (
-                f"Highly consistent spectral profile (ZCR-CV={zcr_cv:.2f}, "
-                f"Energy-CV={energy_cv:.2f}, Centroid-CV={centroid_cv:.2f}). "
-                "TTS synthesis produces unnaturally uniform audio dynamics."
+                f"Highly consistent spectral profile (composite CV={consistency:.3f}: "
+                f"ZCR={zcr_cv:.2f}, Energy={energy_cv:.2f}, Centroid={centroid_cv:.2f}). "
+                "AI synthesis produces unnaturally uniform audio dynamics."
             )
-        elif consistency < 0.65:
-            score, severity = 0.48, SignalSeverity.MEDIUM
+        elif consistency < 0.55:
+            score, severity = 0.58, SignalSeverity.MEDIUM
             desc = (
-                f"Moderately consistent audio (ZCR-CV={zcr_cv:.2f}, "
-                f"Energy-CV={energy_cv:.2f}, Centroid-CV={centroid_cv:.2f})."
+                f"Moderately consistent audio profile (composite CV={consistency:.3f}: "
+                f"ZCR={zcr_cv:.2f}, Energy={energy_cv:.2f}, Centroid={centroid_cv:.2f})."
+            )
+        elif consistency < 0.80:
+            score, severity = 0.30, SignalSeverity.LOW
+            desc = (
+                f"Some consistency detected (composite CV={consistency:.3f}) but within "
+                "normal range for produced/mastered music."
             )
         else:
-            score, severity = 0.15, SignalSeverity.LOW
+            score, severity = 0.12, SignalSeverity.LOW
             desc = (
-                f"Natural audio variability (ZCR-CV={zcr_cv:.2f}, "
-                f"Energy-CV={energy_cv:.2f}, Centroid-CV={centroid_cv:.2f})."
+                f"Natural audio variability (composite CV={consistency:.3f}). "
+                "Spectral profile shifts naturally — consistent with organic recording."
             )
 
         return score, DetectionSignal(
@@ -1208,15 +1467,114 @@ def _audio_spectral_analysis(file_path: Path) -> Tuple[float, DetectionSignal]:
             score=score,
             details=(
                 f"ZCR CV={zcr_cv:.3f} | Energy CV={energy_cv:.3f} | "
-                f"Centroid CV={centroid_cv:.3f} | Duration={len(data)/sr:.1f}s | SR={sr} Hz"
+                f"Centroid CV={centroid_cv:.3f} | Composite={consistency:.3f} | "
+                f"Duration={len(data) / sr:.1f}s | SR={sr} Hz | Frames={frame_count}"
             ),
         )
 
     except Exception as exc:
-        # soundfile can't read MP3/other compressed formats — fall back gracefully
-        return 0.35, DetectionSignal(
+        return 0.40, DetectionSignal(
             name="Audio Spectral Analysis",
-            description=f"Spectral analysis unavailable for this format: {exc}",
+            description=f"Spectral analysis failed: {exc}",
+            severity=SignalSeverity.LOW,
+            score=0.40,
+        )
+
+
+def _audio_dynamic_range(file_path: Path) -> Tuple[float, DetectionSignal]:
+    """
+    Dynamic range analysis — AI music is characteristically over-compressed.
+
+    AI music generation platforms apply aggressive loudness normalisation
+    (LUFS targeting), resulting in very low dynamic range and unusually
+    consistent RMS levels compared to organic studio recordings (which
+    typically span 15–30+ dB of dynamic headroom).
+    """
+    import numpy as np
+
+    try:
+        data, sr = _decode_audio_float32(file_path)
+        if data is None or len(data) < sr * 2:
+            return 0.40, DetectionSignal(
+                name="Dynamic Range Analysis",
+                description="Insufficient audio for dynamic range analysis.",
+                severity=SignalSeverity.LOW,
+                score=0.40,
+            )
+
+        # RMS in 500 ms windows with 50 % overlap
+        win = max(int(sr * 0.5), 1)
+        rms_vals = []
+        for i in range(0, len(data) - win, win // 2):
+            chunk = data[i: i + win]
+            rms = float(np.sqrt(np.mean(chunk ** 2)))
+            if rms > 0.001:   # skip near-silence
+                rms_vals.append(rms)
+
+        if len(rms_vals) < 4:
+            return 0.40, DetectionSignal(
+                name="Dynamic Range Analysis",
+                description="Audio too short or silent for dynamic range analysis.",
+                severity=SignalSeverity.LOW,
+                score=0.40,
+            )
+
+        rms_arr          = np.array(rms_vals)
+        dynamic_range_db = 20 * np.log10(rms_arr.max() / (rms_arr.min() + 1e-9))
+        rms_cv           = float(rms_arr.std() / (rms_arr.mean() + 1e-9))
+
+        # Flat / near-silence sections — padding common in AI generation
+        total_wins = max(len(data) // (win // 2), 1)
+        flat_ratio = (total_wins - len(rms_vals)) / total_wins
+
+        suspicion = 0.0
+        flags: List[str] = []
+
+        if dynamic_range_db < 8:
+            suspicion += 0.42
+            flags.append(f"Very low dynamic range ({dynamic_range_db:.1f} dB)")
+        elif dynamic_range_db < 14:
+            suspicion += 0.22
+            flags.append(f"Low dynamic range ({dynamic_range_db:.1f} dB)")
+
+        if rms_cv < 0.15:
+            suspicion += 0.38
+            flags.append(f"Hyper-consistent loudness (CV={rms_cv:.3f})")
+        elif rms_cv < 0.30:
+            suspicion += 0.18
+            flags.append(f"Low loudness variation (CV={rms_cv:.3f})")
+
+        if flat_ratio > 0.15:
+            suspicion += 0.18
+            flags.append(f"High silent-frame ratio ({flat_ratio:.0%})")
+
+        score = min(suspicion, 0.88)
+
+        if score >= 0.55:
+            severity = SignalSeverity.HIGH
+            desc = f"Hyper-compressed dynamics — hallmark of AI music generation: {'; '.join(flags)}."
+        elif score >= 0.28:
+            severity = SignalSeverity.MEDIUM
+            desc = f"Suspicious dynamic compression: {'; '.join(flags)}." if flags else "Moderately compressed dynamics."
+        else:
+            severity = SignalSeverity.LOW
+            desc = (
+                f"Natural dynamic range ({dynamic_range_db:.1f} dB, RMS CV={rms_cv:.3f}). "
+                "No unusual compression detected."
+            )
+
+        return score, DetectionSignal(
+            name="Dynamic Range Analysis",
+            description=desc,
+            severity=severity,
+            score=score,
+            details=f"DR={dynamic_range_db:.1f}dB | RMS CV={rms_cv:.3f} | Flat ratio={flat_ratio:.1%}",
+        )
+
+    except Exception as exc:
+        return 0.35, DetectionSignal(
+            name="Dynamic Range Analysis",
+            description=f"Dynamic range analysis failed: {exc}",
             severity=SignalSeverity.LOW,
             score=0.35,
         )

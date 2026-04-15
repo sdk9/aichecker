@@ -3,7 +3,26 @@
     "allow": [
       "Bash(npm install:*)",
       "Bash(npm run:*)",
-      "Bash(npx tailwindcss:*)"
+      "Bash(npx tailwindcss:*)",
+      "Read(//home/sdk9/**)",
+      "Bash(curl -s http://localhost:8000/)",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s http://localhost:8000/api/health)",
+      "Bash(curl -s http://localhost:8000/api/billing/plans)",
+      "Bash(curl -s -X POST http://localhost:8000/api/auth/register -H 'Content-Type: application/json' -d '{\"email\":\"test@example.com\",\"password\":\"testpass123\"}')",
+      "Bash(.venv/bin/python -m pytest tests/test_ai_detector.py -v)",
+      "Bash(curl -s http://localhost:5173)",
+      "Bash(echo \"EXIT: $?\")",
+      "Read(//tmp/**)",
+      "Bash(.venv/bin/python -c \"import pydub; print\\('pydub ok'\\)\")",
+      "Bash(.venv/bin/python -c \"import librosa; print\\('librosa ok'\\)\")",
+      "Bash(.venv/bin/python -c \"import soundfile as sf; print\\(sf.__version__\\)\")",
+      "Bash(.venv/bin/python -c \"import ffmpeg; print\\('ffmpeg-python ok'\\)\")",
+      "Bash(.venv/bin/python:*)"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "claude-flow"
+  ]
 }

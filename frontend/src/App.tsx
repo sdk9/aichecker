@@ -3,7 +3,6 @@ import { AuthProvider } from './context/AuthContext'
 import Layout from './components/Layout'
 import Landing from './pages/Landing'
 import Analyze from './pages/Analyze'
-import ApiDocs from './pages/ApiDocs'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
 import ForgotPassword from './pages/ForgotPassword'
@@ -25,7 +24,6 @@ export default function App() {
         <Route element={<Layout />}>
           <Route path="/" element={<Landing />} />
           <Route path="/analyze" element={<Analyze />} />
-          <Route path="/api-docs" element={<ApiDocs />} />
           <Route path="/pricing" element={<Pricing />} />
           <Route path="/account" element={<Account />} />
         </Route>
