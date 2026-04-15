@@ -4,6 +4,7 @@ ML-based AI content detection using pre-trained HuggingFace models.
 Models used:
   - Image: umm-maybe/AI-image-detector  (ViT fine-tuned on AI vs real images)
   - Text:  Hello-SimpleAI/chatgpt-detector-roberta  (RoBERTa, human vs ChatGPT)
+  - Perplexity: openai-community/gpt2  (lower perplexity → more AI-like)
 
 Both models are lazily loaded on first use and kept in memory.
 A background preload is triggered on server startup so the first real
@@ -11,6 +12,7 @@ request doesn't pay the cold-start penalty.
 """
 
 import logging
+import math
 import threading
 from pathlib import Path
 from typing import Optional, Tuple
@@ -20,8 +22,11 @@ logger = logging.getLogger(__name__)
 # ── module-level singletons ──────────────────────────────────────────────────
 _image_pipe = None
 _text_pipe = None
+_gpt2_model = None
+_gpt2_tokenizer = None
 _image_lock = threading.Lock()
 _text_lock = threading.Lock()
+_gpt2_lock = threading.Lock()
 _torch_available: Optional[bool] = None
 
 
@@ -74,6 +79,20 @@ def _get_text_pipe():
     return _text_pipe
 
 
+def _get_gpt2():
+    global _gpt2_model, _gpt2_tokenizer
+    if _gpt2_model is None:
+        with _gpt2_lock:
+            if _gpt2_model is None:
+                from transformers import GPT2LMHeadModel, GPT2TokenizerFast
+                logger.info("Loading GPT-2 perplexity model…")
+                _gpt2_tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+                _gpt2_model = GPT2LMHeadModel.from_pretrained("gpt2")
+                _gpt2_model.eval()
+                logger.info("GPT-2 model ready")
+    return _gpt2_model, _gpt2_tokenizer
+
+
 # ── public API ────────────────────────────────────────────────────────────────
 
 def preload_models() -> None:
@@ -93,8 +112,15 @@ def preload_models() -> None:
         except Exception as exc:
             logger.warning("Text model preload failed: %s", exc)
 
+    def _load_gpt2():
+        try:
+            _get_gpt2()
+        except Exception as exc:
+            logger.warning("GPT-2 model preload failed: %s", exc)
+
     threading.Thread(target=_load_image, daemon=True, name="preload-image-model").start()
     threading.Thread(target=_load_text,  daemon=True, name="preload-text-model").start()
+    threading.Thread(target=_load_gpt2,  daemon=True, name="preload-gpt2-model").start()
 
 
 def ml_image_score(image_path: Path) -> Tuple[Optional[float], str]:
@@ -178,4 +204,62 @@ def ml_text_score(text: str) -> Tuple[Optional[float], str]:
 
     except Exception as exc:
         logger.warning("ML text score failed: %s", exc)
+        return None, str(exc)
+
+
+def ml_perplexity_score(text: str) -> Tuple[Optional[float], str]:
+    """
+    Compute GPT-2 perplexity on the text.
+
+    AI-generated text is more predictable (lower perplexity under GPT-2)
+    than human-written text. Works well even on short, structured text
+    where the RoBERTa classifier struggles.
+
+    Returns:
+        (ai_probability, details_string)  — probability is None if unavailable.
+    """
+    if not _has_torch():
+        return None, "ML not available (torch not installed)"
+
+    try:
+        import torch
+
+        model, tokenizer = _get_gpt2()
+
+        # Flatten bullet-point structure into prose for better perplexity
+        clean = " ".join(text.split())
+        if len(clean.split()) < 10:
+            return None, "Too short for perplexity analysis"
+
+        encodings = tokenizer(
+            clean,
+            return_tensors="pt",
+            truncation=True,
+            max_length=512,
+        )
+
+        with torch.no_grad():
+            outputs = model(**encodings, labels=encodings["input_ids"])
+            perplexity = math.exp(min(outputs.loss.item(), 20))  # cap to avoid overflow
+
+        # Calibration (professional/structured text adjusted):
+        # AI-generated professional text: typically 15-55 perplexity under GPT-2
+        # Human-written professional text: typically 50-150
+        if perplexity < 20:
+            ai_prob = 0.92
+        elif perplexity < 32:
+            ai_prob = 0.80
+        elif perplexity < 48:
+            ai_prob = 0.65
+        elif perplexity < 65:
+            ai_prob = 0.48
+        elif perplexity < 90:
+            ai_prob = 0.28
+        else:
+            ai_prob = 0.10
+
+        return float(ai_prob), f"GPT-2 perplexity={perplexity:.1f} (lower = more AI-like; human text typically >50)"
+
+    except Exception as exc:
+        logger.warning("GPT-2 perplexity failed: %s", exc)
         return None, str(exc)

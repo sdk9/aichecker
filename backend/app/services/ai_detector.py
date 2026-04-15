@@ -143,27 +143,51 @@ async def analyze_document(file_path: Path, mime_type: str) -> Tuple[float, List
         ))
         return 0.3, signals
 
-    # ── 1. ML text classifier (primary) ───────────────────────────────────
-    ml_prob, ml_weight = _ml_text_signal(text, signals)
+    # ── 1. RoBERTa ML classifier ───────────────────────────────────────────
+    ml_prob, _ml_weight = _ml_text_signal(text, signals)
 
-    # ── 2-6. Linguistic heuristics ─────────────────────────────────────────
+    # ── 2. GPT-2 perplexity (works on short/structured text too) ──────────
+    perp_score, perp_sig = _perplexity_signal(text, signals)
+
+    # ── 3. Template / placeholder detector ────────────────────────────────
+    tmpl_score, tmpl_sig = _template_placeholder_check(text)
+
+    # ── 4. Professional AI buzzwords ──────────────────────────────────────
+    buzz_score, buzz_sig = _professional_buzzwords(text)
+
+    # ── 5-9. Linguistic heuristics ─────────────────────────────────────────
     burst_score,  burst_sig  = _text_burstiness(text)
     vocab_score,  vocab_sig  = _vocabulary_richness(text)
     phrase_score, phrase_sig = _transition_phrases(text)
     para_score,   para_sig   = _paragraph_homogeneity(text)
     sim_score,    sim_sig    = _sentence_self_similarity(text)
 
-    signals += [burst_sig, vocab_sig, phrase_sig, para_sig, sim_sig]
-    h_scores = [burst_score, vocab_score, phrase_score, para_score, sim_score]
+    signals += [perp_sig, tmpl_sig, buzz_sig, burst_sig, vocab_sig, phrase_sig, para_sig, sim_sig]
+    h_scores = [tmpl_score, buzz_score, burst_score, vocab_score, phrase_score, para_score, sim_score]
+
+    # Perplexity: cap minimum at 0.38 so it can't actively drag scores down
+    # (high-jargon/structured text inflates GPT-2 perplexity unfairly)
+    p = max(perp_score, 0.38) if perp_score is not None else 0.45
 
     if ml_prob is not None:
-        # ML 55 % + heuristics 45 %
-        h_weights = [0.12, 0.10, 0.12, 0.06, 0.05]  # sum = 0.45
+        # RoBERTa 15% + GPT-2 perplexity 20% + heuristics 65%
+        # RoBERTa is down-weighted — it fails on bullet-point / short structured text
+        # Template + buzzwords get highest heuristic weight (most reliable signals)
+        h_weights = [0.18, 0.14, 0.09, 0.07, 0.09, 0.04, 0.04]  # sum = 0.65
         h_prob = sum(s * w for s, w in zip(h_scores, h_weights))
-        ai_prob = ml_prob * ml_weight + h_prob
+        ai_prob = ml_prob * 0.15 + p * 0.20 + h_prob
     else:
-        h_weights = [0.28, 0.22, 0.25, 0.14, 0.11]  # sum = 1.00
+        # No ML: heuristics carry full weight
+        h_weights = [0.25, 0.22, 0.14, 0.12, 0.15, 0.07, 0.05]  # sum = 1.00
         ai_prob = sum(s * w for s, w in zip(h_scores, h_weights))
+
+    # High-confidence individual signals set a minimum floor:
+    # Template placeholders or dense buzzwords are near-definitive — don't let
+    # weak signals from other checks drag the score below what they imply.
+    if tmpl_score >= 0.80:
+        ai_prob = max(ai_prob, 0.72)
+    elif buzz_score >= 0.80 and phrase_score >= 0.60:
+        ai_prob = max(ai_prob, 0.62)
 
     return float(min(max(ai_prob, 0.0), 1.0)), signals
 
@@ -603,18 +627,29 @@ def _extract_docx_text(file_path: Path) -> str:
     return "\n".join(p.text for p in doc.paragraphs)
 
 
+def _split_into_units(text: str):
+    """
+    Split text into analysable units including bullet points and numbered lists,
+    not just prose sentences ending in .!?
+    """
+    # Split on sentence endings AND newlines (for bullet-point structured docs)
+    raw = re.split(r"[.!?]+|\n+", text)
+    return [s.strip() for s in raw if 2 <= len(s.split()) <= 80]
+
+
 def _text_burstiness(text: str) -> Tuple[float, DetectionSignal]:
     """
-    Burstiness = variability in sentence length.
+    Burstiness = variability in sentence / unit length.
     Human writing is "bursty"; AI text is uniformly structured.
+    Also works on bullet-point CVs and structured documents.
     """
-    sentences = re.split(r"[.!?]+", text)
-    lengths = [len(s.split()) for s in sentences if len(s.split()) > 2]
+    units = _split_into_units(text)
+    lengths = [len(s.split()) for s in units]
 
-    if len(lengths) < 5:
+    if len(lengths) < 4:
         return 0.3, DetectionSignal(
             name="Sentence Burstiness",
-            description="Too few sentences to analyse.",
+            description="Too few units to analyse.",
             severity=SignalSeverity.LOW,
             score=0.3,
         )
@@ -682,6 +717,7 @@ def _vocabulary_richness(text: str) -> Tuple[float, DetectionSignal]:
 def _transition_phrases(text: str) -> Tuple[float, DetectionSignal]:
     """AI text over-uses specific transitional phrases and filler constructs."""
     AI_TRANSITIONS = [
+        # ── Classic AI essay phrases ──
         "in conclusion", "furthermore", "moreover", "it is important to note",
         "it is worth noting", "in summary", "to summarize", "as a result",
         "on the other hand", "in addition", "it should be noted",
@@ -693,6 +729,34 @@ def _transition_phrases(text: str) -> Tuple[float, DetectionSignal]:
         "dive into", "at the end of the day", "moving forward",
         "having said that", "with that being said", "it's worth mentioning",
         "as previously mentioned", "as mentioned earlier",
+        # ── CV / professional AI buzzwords ──
+        "results-driven", "results driven", "detail-oriented", "detail oriented",
+        "quick learner", "fast learner", "proven track record",
+        "strong ability to", "growing interest in", "passionate about",
+        "highly motivated", "self-motivated", "self motivated",
+        "team player", "go-getter", "fast-paced environment",
+        "seeking to leverage", "seeking to utilize", "adept at",
+        "proficient in", "well-versed in", "versed in",
+        "dedicated to", "committed to", "striving to",
+        "ensuring confidentiality", "attention to detail",
+        "strong communication skills", "excellent communication",
+        "analytical thinking", "analytical skills",
+        "problem-solving skills", "problem solving skills",
+        "data-driven", "data driven", "cross-functional",
+        "stakeholder", "synergize", "leverage", "value-added",
+        "actionable insights", "thought leader", "best practices",
+        "continuous improvement", "proactive approach",
+        "comprehensive understanding", "demonstrated ability",
+        "with experience in", "experience in",
+        "dynamic professional", "dynamic individual",
+        "innovative solutions", "strategic thinking",
+        "driving results", "impactful", "collaborative",
+        # ── Structural AI giveaways ──
+        "comprehensive", "multifaceted", "robust", "streamline",
+        "cutting-edge", "state-of-the-art", "holistic approach",
+        "tailor", "tailored", "bespoke", "seamlessly",
+        "transformative", "empower", "foster", "facilitate",
+        "spearhead", "spearheaded", "championed",
     ]
     lower      = text.lower()
     word_count = max(len(text.split()), 1)
@@ -760,8 +824,8 @@ def _sentence_self_similarity(text: str) -> Tuple[float, DetectionSignal]:
     Measures lexical overlap between consecutive sentences using Jaccard similarity.
     AI text tends to stay on the same narrow vocabulary; human text shifts more.
     """
-    sentences = [s.strip() for s in re.split(r"[.!?]+", text) if len(s.split()) > 4]
-    if len(sentences) < 6:
+    sentences = [s for s in _split_into_units(text) if len(s.split()) > 3]
+    if len(sentences) < 5:
         return 0.3, DetectionSignal(
             name="Sentence Self-Similarity",
             description="Too few sentences for self-similarity analysis.",
@@ -796,6 +860,167 @@ def _sentence_self_similarity(text: str) -> Tuple[float, DetectionSignal]:
         severity=severity,
         score=score,
         details=f"Mean Jaccard similarity={mean_sim:.3f} over {len(sims)} pairs",
+    )
+
+
+def _perplexity_signal(
+    text: str,
+    signals: List[DetectionSignal],
+) -> Tuple[Optional[float], DetectionSignal]:
+    """GPT-2 perplexity — lower = more predictable = more AI-like."""
+    try:
+        from app.services.ml_detector import ml_perplexity_score
+        prob, details = ml_perplexity_score(text)
+        if prob is None:
+            sig = DetectionSignal(
+                name="GPT-2 Perplexity",
+                description="Perplexity analysis unavailable.",
+                severity=SignalSeverity.LOW,
+                score=0.45,
+                details=details,
+            )
+            return None, sig
+
+        if prob >= 0.75:
+            severity = SignalSeverity.HIGH
+        elif prob >= 0.50:
+            severity = SignalSeverity.MEDIUM
+        else:
+            severity = SignalSeverity.LOW
+
+        sig = DetectionSignal(
+            name="GPT-2 Perplexity",
+            description=(
+                f"AI-generated text is statistically more predictable under language models. "
+                f"This text scores {prob:.0%} AI-likelihood based on predictability."
+            ),
+            severity=severity,
+            score=prob,
+            details=details,
+        )
+        return prob, sig
+    except Exception as exc:
+        logger.warning("Perplexity signal failed: %s", exc)
+        return None, DetectionSignal(
+            name="GPT-2 Perplexity",
+            description="Perplexity analysis failed.",
+            severity=SignalSeverity.LOW,
+            score=0.45,
+        )
+
+
+def _template_placeholder_check(text: str) -> Tuple[float, DetectionSignal]:
+    """
+    Detect template placeholders and generic fill-in-the-blank patterns.
+    Brackets like [Your Name], 'Company Name', 'University Name' are
+    strong indicators of AI-generated or template content.
+    """
+    PLACEHOLDER_PATTERNS = [
+        r"\[your [^\]]{1,40}\]",        # [Your Full Name], [Your Email] …
+        r"\[name\]", r"\[email\]",
+        r"\[company[^\]]{0,20}\]",
+        r"\[job title\]", r"\[position\]",
+        r"\[university[^\]]{0,20}\]",
+        r"\[degree[^\]]{0,20}\]",
+        r"\[year[^\]]{0,10}\]",
+        r"\byour full name\b",
+        r"\bcompany name\b",
+        r"\buniversity name\b",
+        r"\bjob title\b\s*[-–]",
+        r"\bdegree\b\s*[-–]\s*university",
+        r"\bcity,\s*country\b",
+        r"\(year\s*[-–]\s*present\)",
+        r"\(year\)",
+        r"\byour name\b",
+        r"\byour email\b",
+        r"\byour phone\b",
+    ]
+    lower = text.lower()
+    found = []
+    for pat in PLACEHOLDER_PATTERNS:
+        matches = re.findall(pat, lower)
+        found.extend(matches)
+
+    count = len(found)
+    if count >= 3:
+        score, severity = 0.96, SignalSeverity.HIGH
+        desc = (
+            f"Found {count} template placeholders (e.g. {', '.join(repr(f) for f in found[:3])}). "
+            "These are strong markers of AI-generated or template content."
+        )
+    elif count >= 1:
+        score, severity = 0.82, SignalSeverity.HIGH
+        desc = f"Found template placeholder: {', '.join(repr(f) for f in found)}. Indicates AI-generated or template content."
+    else:
+        score, severity = 0.05, SignalSeverity.LOW
+        desc = "No template placeholders detected."
+
+    return score, DetectionSignal(
+        name="Template Placeholders",
+        description=desc,
+        severity=severity,
+        score=score,
+        details=f"Placeholders found: {count}",
+    )
+
+
+def _professional_buzzwords(text: str) -> Tuple[float, DetectionSignal]:
+    """
+    Detect high-density professional buzzwords that AI models overuse
+    in CVs, cover letters, and business documents.
+    """
+    BUZZWORDS = [
+        "results-driven", "results driven", "detail-oriented", "detail oriented",
+        "quick learner", "fast learner", "proven track record",
+        "strong ability", "growing interest", "passionate about",
+        "highly motivated", "self-motivated", "team player",
+        "fast-paced", "seeking to leverage", "adept at",
+        "dedicated professional", "committed to excellence",
+        "ensuring confidentiality", "data accuracy",
+        "strong communication", "excellent communication",
+        "analytical thinking", "problem-solving",
+        "cross-functional", "stakeholder", "synergize",
+        "actionable insights", "best practices",
+        "continuous improvement", "proactive",
+        "comprehensive understanding", "demonstrated ability",
+        "dynamic professional", "innovative solutions",
+        "strategic thinking", "driving results",
+        "streamline", "cutting-edge", "holistic approach",
+        "transformative", "empower", "spearhead",
+        "leveraging", "value-added", "collaborative environment",
+        "attention to detail", "time management",
+        "communication skills", "teamwork",
+    ]
+    lower = text.lower()
+    word_count = max(len(text.split()), 1)
+    found = [(bw, lower.count(bw)) for bw in BUZZWORDS if bw in lower]
+    total_hits = sum(c for _, c in found)
+    density = total_hits / (word_count / 100)
+
+    if density > 4.0 or len(found) >= 6:
+        score, severity = 0.88, SignalSeverity.HIGH
+        top = sorted(found, key=lambda x: x[1], reverse=True)[:5]
+        desc = (
+            f"Very high professional buzzword density ({density:.1f}/100 words, {len(found)} unique). "
+            f"Top: {', '.join(bw for bw, _ in top)}. "
+            "AI models saturate professional documents with these phrases."
+        )
+    elif density > 2.0 or len(found) >= 3:
+        score, severity = 0.65, SignalSeverity.MEDIUM
+        desc = f"Elevated buzzword density ({density:.1f}/100 words, {len(found)} unique). Common in AI-written professional content."
+    elif len(found) >= 1:
+        score, severity = 0.35, SignalSeverity.LOW
+        desc = f"Low buzzword density ({density:.1f}/100 words). A few common professional phrases detected."
+    else:
+        score, severity = 0.08, SignalSeverity.LOW
+        desc = "No notable professional AI buzzwords detected."
+
+    return score, DetectionSignal(
+        name="Professional AI Buzzwords",
+        description=desc,
+        severity=severity,
+        score=score,
+        details=f"Density={density:.2f}/100 words | Unique buzzwords: {len(found)}",
     )
 
 
