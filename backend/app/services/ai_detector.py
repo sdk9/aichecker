@@ -233,12 +233,14 @@ def _ml_text_signal(
 async def analyze_audio(file_path: Path) -> Tuple[float, List[DetectionSignal]]:
     """Returns (ai_probability, signals).
 
-    Five-signal pipeline:
-      1. AI tool binary/tag scan  — highest confidence when it hits
+    Six-signal pipeline:
+      1. AI tool binary/tag scan  — near-definitive when it hits
       2. Metadata completeness     — AI tools skip proper tagging
       3. Format heuristics         — sample rate, duration patterns
       4. Spectral consistency      — ffmpeg-decoded, works on MP3/AAC
       5. Dynamic range             — AI music is hyper-compressed
+      6. 30s deep acoustic scan    — spectral flatness, sub-band energy,
+                                     envelope smoothness over a full segment
     """
     signals: List[DetectionSignal] = []
 
@@ -247,21 +249,31 @@ async def analyze_audio(file_path: Path) -> Tuple[float, List[DetectionSignal]]:
     fmt_score,      fmt_sig      = _audio_format_check(file_path)
     spectral_score, spectral_sig = _audio_spectral_analysis(file_path)
     dynamic_score,  dynamic_sig  = _audio_dynamic_range(file_path)
+    deep_score,     deep_sig     = _audio_30s_deep_scan(file_path)
 
-    signals += [tool_sig, meta_sig, fmt_sig, spectral_sig, dynamic_sig]
+    signals += [tool_sig, meta_sig, fmt_sig, spectral_sig, dynamic_sig, deep_sig]
 
-    ai_prob = (
-        tool_score     * 0.30 +
-        meta_score     * 0.18 +
-        fmt_score      * 0.15 +
-        spectral_score * 0.22 +
-        dynamic_score  * 0.15
-    )
-    # Hard floor when AI tool is positively identified
     if tool_score >= 0.75:
-        ai_prob = max(ai_prob, 0.75)
-    elif tool_score >= 0.50:
-        ai_prob = max(ai_prob, 0.50)
+        # AI tool positively identified — use it as primary anchor
+        ai_prob = max(
+            tool_score * 0.40 + meta_score * 0.12 +
+            spectral_score * 0.18 + dynamic_score * 0.15 + deep_score * 0.15,
+            0.75,
+        )
+    else:
+        # No tool marker — acoustic signals drive the score entirely.
+        # tool_score has a floor of 0.20 (no-match), so give it minimal weight
+        # to avoid it dragging down strong acoustic detections.
+        ai_prob = (
+            meta_score     * 0.18 +
+            fmt_score      * 0.10 +
+            spectral_score * 0.25 +
+            dynamic_score  * 0.22 +
+            deep_score     * 0.25
+        )
+        # Soft boost when tool scan is partial (0.50–0.74)
+        if tool_score >= 0.50:
+            ai_prob = max(ai_prob, 0.50)
 
     return float(min(max(ai_prob, 0.0), 1.0)), signals
 
@@ -1577,6 +1589,172 @@ def _audio_dynamic_range(file_path: Path) -> Tuple[float, DetectionSignal]:
             description=f"Dynamic range analysis failed: {exc}",
             severity=SignalSeverity.LOW,
             score=0.35,
+        )
+
+
+def _audio_30s_deep_scan(file_path: Path) -> Tuple[float, DetectionSignal]:
+    """
+    Deep acoustic analysis over a 30-second segment.
+
+    Extracts 30 s starting at 5 s in (skipping intros/silence) and computes:
+
+    1. Spectral flatness (Wiener entropy) CV — AI synthesis has unnaturally
+       stable flatness across frames; natural recordings vary widely.
+    2. Sub-band energy CV (bass/mid/high) — AI music maintains suspiciously
+       consistent energy distribution across frequency bands over time.
+    3. Amplitude envelope CV — AI music loudness barely fluctuates at the
+       frame level; real recordings breathe with natural micro-dynamics.
+
+    All three metrics are measured as coefficient of variation (CV = std/mean).
+    Low CV across frames = too consistent = AI-like.
+    """
+    import numpy as np
+    import subprocess
+
+    def _extract_segment(path: Path, skip: float, duration: float):
+        """Decode `duration` seconds starting at `skip` to float32 mono @ 22050 Hz."""
+        cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-ss", str(skip),
+            "-i", str(path),
+            "-t", str(duration),
+            "-ac", "1",
+            "-ar", "22050",
+            "-f", "f32le",
+            "pipe:1",
+        ]
+        r = subprocess.run(cmd, capture_output=True, timeout=60)
+        if r.returncode == 0 and r.stdout:
+            return np.frombuffer(r.stdout, dtype=np.float32).copy()
+        return None
+
+    try:
+        sr = 22050
+        # Try skipping the first 5 s; fall back to start of file
+        data = _extract_segment(file_path, skip=5.0, duration=30.0)
+        if data is None or len(data) < sr * 5:
+            data = _extract_segment(file_path, skip=0.0, duration=30.0)
+        if data is None or len(data) < sr * 2:
+            return 0.45, DetectionSignal(
+                name="30s Deep Acoustic Scan",
+                description="Could not extract audio segment for deep analysis.",
+                severity=SignalSeverity.LOW,
+                score=0.45,
+            )
+
+        max_val = np.abs(data).max()
+        if max_val > 0:
+            data /= max_val
+
+        frame_size = 2048          # ~93 ms @ 22050 Hz — good frequency resolution
+        hop_size   = 512           # ~23 ms hop
+        window     = np.hanning(frame_size)
+        freqs      = np.fft.rfftfreq(frame_size, d=1.0 / sr)
+
+        bass_mask = freqs < 300
+        mid_mask  = (freqs >= 300)  & (freqs < 3000)
+        high_mask = freqs >= 3000
+
+        flatness_vals: list  = []
+        envelope_vals: list  = []
+        bass_e: list         = []
+        mid_e: list          = []
+        high_e: list         = []
+
+        for i in range(0, len(data) - frame_size, hop_size):
+            if len(flatness_vals) >= 2000:
+                break
+            frame = data[i: i + frame_size] * window
+
+            # Amplitude envelope
+            envelope_vals.append(float(np.sqrt(np.mean(frame ** 2))))
+
+            mag = np.abs(np.fft.rfft(frame)) + 1e-10
+
+            # Wiener spectral flatness
+            log_mean   = float(np.mean(np.log(mag)))
+            arith_mean = float(np.mean(mag))
+            flatness_vals.append(float(np.exp(log_mean) / (arith_mean + 1e-10)))
+
+            # Sub-band energies
+            bass_e.append(float(mag[bass_mask].mean()))
+            mid_e.append(float(mag[mid_mask].mean()))
+            high_e.append(float(mag[high_mask].mean()))
+
+        def _cv(vals: list) -> float:
+            a = np.array(vals)
+            m = float(a.mean())
+            return float(a.std() / (m + 1e-9)) if m > 0 else 1.0
+
+        envelope_cv   = _cv(envelope_vals)
+        flatness_cv   = _cv(flatness_vals)
+        bass_cv       = _cv(bass_e)
+        mid_cv        = _cv(mid_e)
+        high_cv       = _cv(high_e)
+        band_cv       = (bass_cv + mid_cv + high_cv) / 3.0
+        mean_flatness = float(np.mean(flatness_vals))
+
+        suspicion = 0.0
+        flags: List[str] = []
+
+        # Envelope consistency
+        if envelope_cv < 0.18:
+            suspicion += 0.36
+            flags.append(f"hyper-stable loudness envelope (CV={envelope_cv:.3f})")
+        elif envelope_cv < 0.35:
+            suspicion += 0.16
+            flags.append(f"stable loudness envelope (CV={envelope_cv:.3f})")
+
+        # Spectral flatness consistency
+        if flatness_cv < 0.08:
+            suspicion += 0.32
+            flags.append(f"ultra-consistent spectral flatness (CV={flatness_cv:.3f})")
+        elif flatness_cv < 0.18:
+            suspicion += 0.16
+            flags.append(f"consistent spectral flatness (CV={flatness_cv:.3f})")
+
+        # Sub-band energy consistency
+        if band_cv < 0.22:
+            suspicion += 0.28
+            flags.append(f"rigid sub-band energy (CV={band_cv:.3f})")
+        elif band_cv < 0.38:
+            suspicion += 0.12
+            flags.append(f"stable sub-band energy (CV={band_cv:.3f})")
+
+        score = min(suspicion, 0.92)
+
+        if score >= 0.60:
+            severity = SignalSeverity.HIGH
+            desc = f"30s deep scan: strong AI acoustic signatures — {'; '.join(flags)}."
+        elif score >= 0.32:
+            severity = SignalSeverity.MEDIUM
+            desc = f"30s deep scan: suspicious acoustic patterns — {'; '.join(flags)}."
+        else:
+            severity = SignalSeverity.LOW
+            desc = (
+                f"30s deep scan: natural acoustic variation detected "
+                f"(envelope CV={envelope_cv:.3f}, flatness CV={flatness_cv:.3f}, "
+                f"band CV={band_cv:.3f})."
+            )
+
+        return score, DetectionSignal(
+            name="30s Deep Acoustic Scan",
+            description=desc,
+            severity=severity,
+            score=score,
+            details=(
+                f"Envelope CV={envelope_cv:.3f} | Flatness CV={flatness_cv:.3f} | "
+                f"Band CV={band_cv:.3f} (bass={bass_cv:.3f} mid={mid_cv:.3f} high={high_cv:.3f}) | "
+                f"Mean flatness={mean_flatness:.4f} | Frames={len(flatness_vals)} | SR={sr} Hz"
+            ),
+        )
+
+    except Exception as exc:
+        return 0.40, DetectionSignal(
+            name="30s Deep Acoustic Scan",
+            description=f"Deep scan failed: {exc}",
+            severity=SignalSeverity.LOW,
+            score=0.40,
         )
 
 
