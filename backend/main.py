@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routers.analyze import router as analyze_router
 from app.routers.auth import router as auth_router
 from app.routers.billing import router as billing_router
+from app.routers.admin import router as admin_router
 
 
 @asynccontextmanager
@@ -56,6 +57,7 @@ app.add_middleware(
 app.include_router(analyze_router)
 app.include_router(auth_router)
 app.include_router(billing_router)
+app.include_router(admin_router)
 
 
 @app.get("/")

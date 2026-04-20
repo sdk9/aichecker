@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
-import { ShieldCheck, Menu, X, User, LogOut, ChevronDown } from 'lucide-react'
+import { ShieldCheck, Menu, X, User, LogOut, ChevronDown, Crown } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
 import { useAuth } from '../context/AuthContext'
 
@@ -101,6 +101,16 @@ export default function Header() {
                       <ShieldCheck className="w-4 h-4" />
                       Upgrade Plan
                     </Link>
+                    {user?.email === 'iacob.zamfir@gmail.com' && (
+                      <Link
+                        to="/admin"
+                        onClick={() => setDropOpen(false)}
+                        className="flex items-center gap-2 px-4 py-2.5 text-sm text-amber-400 hover:text-amber-300 hover:bg-slate-800"
+                      >
+                        <Crown className="w-4 h-4" />
+                        Admin
+                      </Link>
+                    )}
                     <hr className="border-slate-800 my-1" />
                     <button
                       onClick={() => { logout(); setDropOpen(false) }}
