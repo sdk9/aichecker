@@ -9,6 +9,8 @@ import ForgotPassword from './pages/ForgotPassword'
 import ResetPassword from './pages/ResetPassword'
 import Pricing from './pages/Pricing'
 import Account from './pages/Account'
+import Terms from './pages/Terms'
+import Contact from './pages/Contact'
 
 export default function App() {
   return (
@@ -26,6 +28,8 @@ export default function App() {
           <Route path="/analyze" element={<Analyze />} />
           <Route path="/pricing" element={<Pricing />} />
           <Route path="/account" element={<Account />} />
+          <Route path="/terms" element={<Terms />} />
+          <Route path="/contact" element={<Contact />} />
         </Route>
       </Routes>
     </AuthProvider>

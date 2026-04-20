@@ -120,20 +120,24 @@ def _compute_confidence(signals: list, n_signals: int) -> float:
 
 
 def _check_rate_limit(user, db: Session):
-    """Enforce daily scan limits. Resets at midnight UTC."""
-    from app.routers.auth import PLAN_DAILY_LIMITS
+    """Enforce monthly scan limits. Resets on the 1st of each month (UTC)."""
+    from app.routers.auth import PLAN_MONTHLY_LIMITS
     if user is None:
-        return  # anonymous — allow (no per-IP limit in this implementation)
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if user.last_scan_date != today:
+        raise HTTPException(
+            401,
+            "Please create a free account to use VeritasAI. "
+            "Sign up at /signup — 1 scan/month free, unlimited for $4.99/month.",
+        )
+    this_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    if user.last_scan_date != this_month:
         user.daily_scans = 0
-        user.last_scan_date = today
-    limit = PLAN_DAILY_LIMITS.get(user.plan, 10)
+        user.last_scan_date = this_month
+    limit = PLAN_MONTHLY_LIMITS.get(user.plan, 1)
     if user.daily_scans >= limit:
         raise HTTPException(
             429,
-            f"Daily scan limit reached ({limit}/day on {user.plan} plan). "
-            "Upgrade at /pricing for more scans.",
+            f"Monthly scan limit reached ({limit}/month on {user.plan} plan). "
+            "Upgrade to Pro at /pricing for unlimited scans.",
         )
     user.daily_scans += 1
     db.commit()

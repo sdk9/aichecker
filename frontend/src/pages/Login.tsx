@@ -1,6 +1,6 @@
 import { useState, FormEvent } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
-import { ShieldCheck, Eye, EyeOff, AlertCircle } from 'lucide-react'
+import { ShieldCheck, Eye, EyeOff, AlertCircle, KeyRound, Mail } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 
 export default function Login() {
@@ -107,6 +107,38 @@ export default function Login() {
               Create one free
             </Link>
           </p>
+        </div>
+
+        {/* Account recovery */}
+        <div className="mt-5 card p-5">
+          <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
+            <KeyRound className="w-4 h-4 text-indigo-400" />
+            Account Recovery
+          </h3>
+          <div className="space-y-2.5">
+            <div className="flex items-start gap-2">
+              <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 mt-1.5 flex-shrink-0" />
+              <p className="text-slate-400 text-xs leading-relaxed">
+                <strong className="text-slate-300">Forgot your password?</strong>{' '}
+                Use the{' '}
+                <Link to="/forgot-password" className="text-indigo-400 hover:text-indigo-300 font-medium">
+                  password reset link
+                </Link>{' '}
+                above to receive a reset link by email.
+              </p>
+            </div>
+            <div className="flex items-start gap-2">
+              <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 mt-1.5 flex-shrink-0" />
+              <p className="text-slate-400 text-xs leading-relaxed">
+                <strong className="text-slate-300">Can't access your email?</strong>{' '}
+                Contact our support team at{' '}
+                <a href="mailto:contact@veritasartificialis.com" className="text-indigo-400 hover:text-indigo-300">
+                  contact@veritasartificialis.com
+                </a>{' '}
+                for manual account recovery.
+              </p>
+            </div>
+          </div>
         </div>
       </div>
     </div>

@@ -1,14 +1,18 @@
 import { useState, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { Link } from 'react-router-dom'
+import { ShieldCheck, ArrowRight } from 'lucide-react'
 import axios from 'axios'
 import { AnalysisResult } from '../types/analysis'
 import UploadZone from '../components/UploadZone'
 import AnalysisProgress from '../components/AnalysisProgress'
 import ResultsDashboard from '../components/ResultsDashboard'
+import { useAuth } from '../context/AuthContext'
 
 type Stage = 'upload' | 'analyzing' | 'results'
 
 export default function Analyze() {
+  const { user } = useAuth()
   const [stage, setStage] = useState<Stage>('upload')
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -94,7 +98,7 @@ export default function Analyze() {
                 Detect AI-Generated Content
               </h1>
               <p className="text-slate-400 text-lg max-w-xl mx-auto">
-                Upload any image, video, audio, PDF, or DOCX file for full forensic analysis.
+                Upload any image, PDF, DOCX, PPTX, or spreadsheet for full forensic analysis.
               </p>
             </motion.div>
           )}
@@ -111,9 +115,35 @@ export default function Analyze() {
           </motion.div>
         )}
 
+        {/* Auth gate */}
+        {!user && stage === 'upload' && (
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="card p-10 text-center mb-6"
+          >
+            <div className="w-16 h-16 bg-indigo-600/20 rounded-2xl flex items-center justify-center mx-auto mb-5">
+              <ShieldCheck className="w-8 h-8 text-indigo-400" />
+            </div>
+            <h2 className="text-2xl font-bold text-white mb-3">Create a free account to start</h2>
+            <p className="text-slate-400 text-sm leading-relaxed max-w-md mx-auto mb-7">
+              Sign up for free to get 1 scan per month. Upgrade to Pro for unlimited scans at $4.99/month.
+              No credit card required for the free plan.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <Link to="/signup" className="btn-primary inline-flex items-center justify-center gap-2 px-8 py-3">
+                Create free account <ArrowRight className="w-4 h-4" />
+              </Link>
+              <Link to="/login" className="btn-secondary inline-flex items-center justify-center gap-2 px-8 py-3">
+                Sign in
+              </Link>
+            </div>
+          </motion.div>
+        )}
+
         {/* Stage renderer */}
         <AnimatePresence mode="wait">
-          {stage === 'upload' && (
+          {stage === 'upload' && user && (
             <motion.div
               key="upload"
               initial={{ opacity: 0, y: 20 }}

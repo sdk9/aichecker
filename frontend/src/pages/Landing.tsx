@@ -77,8 +77,8 @@ export default function Landing() {
             <Link to="/analyze" className="btn-primary flex items-center justify-center gap-2 text-base px-8 py-4">
               Analyze a File <ArrowRight className="w-4 h-4" />
             </Link>
-            <Link to="/api-docs" className="btn-secondary flex items-center justify-center gap-2 text-base px-8 py-4">
-              View API Docs
+            <Link to="/pricing" className="btn-secondary flex items-center justify-center gap-2 text-base px-8 py-4">
+              View Pricing
             </Link>
           </motion.div>
 

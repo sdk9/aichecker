@@ -15,7 +15,7 @@ export default function Footer() {
             </div>
             <p className="text-slate-400 text-sm leading-relaxed max-w-sm">
               Professional AI-generated content detection for enterprises.
-              Protecting trust in images, video, audio, and documents.
+              Protecting trust in images and documents.
             </p>
           </div>
 
@@ -23,7 +23,7 @@ export default function Footer() {
             <h4 className="text-sm font-semibold text-slate-200 mb-3">Product</h4>
             <ul className="space-y-2 text-sm text-slate-400">
               <li><Link to="/analyze" className="hover:text-slate-200 transition-colors">Detect Content</Link></li>
-              <li><Link to="/api-docs" className="hover:text-slate-200 transition-colors">API Reference</Link></li>
+              <li><Link to="/pricing" className="hover:text-slate-200 transition-colors">Pricing</Link></li>
               <li><Link to="/#niches" className="hover:text-slate-200 transition-colors">Use Cases</Link></li>
             </ul>
           </div>
@@ -32,18 +32,26 @@ export default function Footer() {
             <h4 className="text-sm font-semibold text-slate-200 mb-3">Supported Formats</h4>
             <ul className="space-y-2 text-sm text-slate-400">
               <li>Images: JPEG, PNG, WebP, TIFF</li>
-              <li>Video: MP4, MOV, WebM</li>
-              <li>Audio: MP3, WAV, FLAC, AAC</li>
               <li>Docs: PDF, DOCX</li>
+              <li>Presentations: PPTX, PPT</li>
+              <li>Spreadsheets: XLSX, CSV</li>
             </ul>
           </div>
         </div>
 
         <div className="border-t border-slate-800 mt-10 pt-6 flex flex-col sm:flex-row justify-between items-center gap-4">
-          <p className="text-slate-500 text-xs">
-            © 2025 VeritasAI. For research and compliance use.
-          </p>
-          <p className="text-slate-600 text-xs">
+          <div className="flex flex-wrap items-center gap-4">
+            <p className="text-slate-500 text-xs">
+              © {new Date().getFullYear()} VeritasAI. For research and compliance use.
+            </p>
+            <Link to="/terms" className="text-slate-500 text-xs hover:text-slate-300 transition-colors">
+              Terms & Conditions
+            </Link>
+            <Link to="/contact" className="text-slate-500 text-xs hover:text-slate-300 transition-colors">
+              Contact Us
+            </Link>
+          </div>
+          <p className="text-amber-500/70 text-xs font-medium">
             Results are probabilistic — always combine with human review.
           </p>
         </div>

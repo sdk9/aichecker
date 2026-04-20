@@ -6,6 +6,7 @@ import axios from 'axios'
 import { useAuth } from '../context/AuthContext'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const STRIPE_PRO_LINK = 'https://buy.stripe.com/14A3cxffy7n6fZn9hvcIE00'
 
 interface Plan {
   id: string
@@ -44,11 +45,10 @@ const BORDER: Record<string, string> = {
 }
 
 export default function Pricing() {
-  const { user, token } = useAuth()
+  const { user } = useAuth()
   const navigate = useNavigate()
   const [plans, setPlans] = useState<Plan[]>([])
   const [loading, setLoading] = useState(true)
-  const [upgrading, setUpgrading] = useState<string | null>(null)
   const [error, setError] = useState('')
 
   const searchParams = new URLSearchParams(window.location.search)
@@ -60,26 +60,16 @@ export default function Pricing() {
       .finally(() => setLoading(false))
   }, [])
 
-  const handleSelect = async (plan: Plan) => {
+  const handleSelect = (plan: Plan) => {
     if (plan.id === 'free') return
     if (!user) { navigate('/signup', { state: { from: '/pricing' } }); return }
     if (plan.id === 'enterprise') {
-      window.location.href = 'mailto:sales@veritasai.app?subject=Enterprise%20Plan'
+      window.location.href = 'mailto:contact@veritasartificialis.com?subject=Enterprise%20Plan'
       return
     }
-    setError('')
-    setUpgrading(plan.id)
-    try {
-      const { data } = await axios.post(
-        `${API}/api/billing/create-checkout`,
-        { plan_id: plan.id },
-        { headers: { Authorization: `Bearer ${token}` } },
-      )
-      window.location.href = data.url
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || 'Could not start checkout. Try again.')
-    } finally {
-      setUpgrading(null)
+    if (plan.id === 'pro') {
+      const url = `${STRIPE_PRO_LINK}?prefilled_email=${encodeURIComponent(user.email)}&client_reference_id=${user.id}`
+      window.location.href = url
     }
   }
 
@@ -162,7 +152,7 @@ export default function Pricing() {
                   </div>
                   <h2 className="text-lg font-bold text-white mb-1">{plan.name}</h2>
                   <p className="text-slate-400 text-sm mb-4">
-                    {plan.scans_per_day >= 9999 ? 'Unlimited' : plan.scans_per_day} scans/day
+                    {plan.scans_per_day >= 9999 ? 'Unlimited scans' : `${plan.scans_per_day} scan/month`}
                   </p>
 
                   {/* Price */}
@@ -195,14 +185,13 @@ export default function Pricing() {
                   ) : (
                     <button
                       onClick={() => handleSelect(plan)}
-                      disabled={upgrading === plan.id}
-                      className={`w-full py-2.5 rounded-lg text-sm font-semibold transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
+                      className={`w-full py-2.5 rounded-lg text-sm font-semibold transition-colors ${
                         isPro
                           ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
                           : 'bg-purple-600 hover:bg-purple-500 text-white'
                       }`}
                     >
-                      {upgrading === plan.id ? 'Redirecting…' : plan.cta}
+                      {plan.cta}
                     </button>
                   )}
                 </motion.div>

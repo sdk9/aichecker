@@ -23,8 +23,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 bearer = HTTPBearer(auto_error=False)
 
-# ── Plan limits ───────────────────────────────────────────────────────────────
-PLAN_DAILY_LIMITS = {"free": 1, "pro": 9999, "enterprise": 9999}
+# ── Plan limits (per calendar month) ─────────────────────────────────────────
+PLAN_DAILY_LIMITS = {"free": 1, "pro": 9999, "enterprise": 9999}  # kept for import compat
+PLAN_MONTHLY_LIMITS = {"free": 1, "pro": 9999, "enterprise": 9999}
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -194,7 +195,7 @@ def reset_password(body: ResetPasswordRequest, db: Session = Depends(get_db)):
 # ── Utility ───────────────────────────────────────────────────────────────────
 
 def _user_out(user: User) -> dict:
-    limit = PLAN_DAILY_LIMITS.get(user.plan, 1)
+    limit = PLAN_MONTHLY_LIMITS.get(user.plan, 1)
     return {
         "id": user.id,
         "email": user.email,
@@ -203,6 +204,8 @@ def _user_out(user: User) -> dict:
         "is_verified": user.is_verified,
         "daily_scans": user.daily_scans,
         "daily_limit": limit,
+        "monthly_scans": user.daily_scans,
+        "monthly_limit": limit,
         "created_at": user.created_at.isoformat() if user.created_at else "",
     }
 

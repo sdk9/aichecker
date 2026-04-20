@@ -48,7 +48,7 @@ export default function Signup() {
 
         <div className="card p-8">
           <h1 className="text-2xl font-bold text-white mb-2">Create your account</h1>
-          <p className="text-slate-400 text-sm mb-6">Free — 10 scans/day, no credit card required</p>
+          <p className="text-slate-400 text-sm mb-6">Free — 1 scan/month, no credit card required</p>
 
           {error && (
             <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-lg px-4 py-3 mb-5">

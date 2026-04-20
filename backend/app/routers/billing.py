@@ -22,6 +22,11 @@ WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 # ── Plans ─────────────────────────────────────────────────────────────────────
+STRIPE_PRO_PAYMENT_LINK = os.getenv(
+    "STRIPE_PRO_PAYMENT_LINK",
+    "https://buy.stripe.com/14A3cxffy7n6fZn9hvcIE00",
+)
+
 PLANS = [
     {
         "id": "free",
@@ -31,10 +36,11 @@ PLANS = [
         "interval": None,
         "scans_per_day": 1,
         "features": [
-            "1 scan / day",
-            "Images, documents, audio",
+            "1 scan / month",
+            "Images, documents, spreadsheets",
             "PDF evidence report",
             "Neural network classifiers",
+            "Account required",
         ],
         "stripe_price_id": None,
         "cta": "Current plan",
@@ -48,13 +54,14 @@ PLANS = [
         "scans_per_day": 9999,
         "features": [
             "Unlimited scans",
-            "All file types + video",
+            "All supported file types",
             "Priority processing",
             "PDF evidence report",
             "Neural network classifiers",
-            "API access",
+            "Cancel anytime",
         ],
         "stripe_price_id": os.getenv("STRIPE_PRO_PRICE_ID", ""),
+        "payment_link": STRIPE_PRO_PAYMENT_LINK,
         "cta": "Upgrade to Pro",
     },
 ]
@@ -168,9 +175,27 @@ def _handle_event(event: dict, db: Session):
 
     elif etype == "checkout.session.completed":
         session = event["data"]["object"]
+        # Support both Payment Links (client_reference_id) and checkout sessions (metadata)
+        user_id = session.get("client_reference_id") or session.get("metadata", {}).get("user_id")
+        if user_id:
+            try:
+                user = db.query(User).filter(User.id == int(user_id)).first()
+                if user:
+                    user.plan = "pro"
+                    if session.get("subscription"):
+                        user.stripe_subscription_id = session["subscription"]
+                    if session.get("customer"):
+                        user.stripe_customer_id = session["customer"]
+                    db.commit()
+                    logger.info("Upgraded plan for user %s → pro (via payment link)", user.email)
+            except Exception as exc:
+                logger.warning("Failed to upgrade user from checkout session: %s", exc)
         if session.get("subscription"):
-            sub = stripe.Subscription.retrieve(session["subscription"])
-            _update_subscription(sub, db)
+            try:
+                sub = stripe.Subscription.retrieve(session["subscription"])
+                _update_subscription(sub, db)
+            except Exception:
+                pass
 
     else:
         logger.debug("Unhandled Stripe event: %s", etype)

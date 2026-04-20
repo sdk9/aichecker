@@ -1,0 +1,57 @@
+<svg width="1400" height="320" viewBox="0 0 1400 320" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1400" y2="320" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#020617"/>
+      <stop offset="1" stop-color="#0F172A"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="190" y1="56" x2="190" y2="184" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6366F1"/>
+      <stop offset="1" stop-color="#4F46E5"/>
+    </linearGradient>
+    <linearGradient id="line" x1="0" y1="319" x2="1400" y2="319" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6366F1" stop-opacity="0"/>
+      <stop offset="0.2" stop-color="#6366F1" stop-opacity="0.55"/>
+      <stop offset="0.5" stop-color="#A5B4FC" stop-opacity="0.95"/>
+      <stop offset="0.8" stop-color="#6366F1" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#6366F1" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shadow" x="104" y="40" width="172" height="172" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="6"/>
+      <feGaussianBlur stdDeviation="10"/>
+      <feComposite in2="hardAlpha" operator="out"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.0588235 0 0 0 0 0.0941176 0 0 0 0 0.235294 0 0 0 0.35 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
+    </filter>
+  </defs>
+
+  <rect width="1400" height="320" rx="24" fill="url(#bg)"/>
+
+  <path d="M0 271C187 222 340 209 468 231C591 252 704 285 824 282C958 279 1063 230 1187 213C1266 201 1337 211 1400 235V320H0V271Z" fill="#1E293B" fill-opacity="0.34"/>
+  <path d="M0 292C183 252 340 246 482 264C609 281 722 305 841 303C972 301 1080 271 1198 251C1275 238 1342 241 1400 258V320H0V292Z" fill="#312E81" fill-opacity="0.24"/>
+  <rect y="316" width="1400" height="4" fill="url(#line)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="124" y="56" width="132" height="132" rx="20" fill="url(#accent)"/>
+    <path d="M190 83L225 97V125C225 149.2 209.7 171.4 190 178C170.3 171.4 155 149.2 155 125V97L190 83Z" fill="white" fill-opacity="0.18"/>
+    <path d="M190 90L219 101.5V124.5C219 145 206.5 163 190 168.9C173.5 163 161 145 161 124.5V101.5L190 90Z" stroke="white" stroke-width="8" stroke-linejoin="round"/>
+    <path d="M176 128L187 139L206 117" stroke="white" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <text x="308" y="128" fill="#F8FAFC" font-family="Inter, Arial, sans-serif" font-size="68" font-weight="700" letter-spacing="0">
+    Veritas
+  </text>
+  <text x="558" y="128" fill="#818CF8" font-family="Inter, Arial, sans-serif" font-size="68" font-weight="700" letter-spacing="0">
+    AI
+  </text>
+
+  <text x="311" y="176" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="500" letter-spacing="0">
+    AI Content Detection
+  </text>
+
+  <text x="311" y="232" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="500" letter-spacing="0">
+    Verified analysis for reports, billing, and forensic workflows
+  </text>
+</svg>

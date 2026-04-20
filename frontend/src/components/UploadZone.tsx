@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Upload, ImageIcon, FileText, Table2, Presentation, AlertCircle } from 'lucide-react'
+import { Upload, ImageIcon, FileText, Table2, Presentation, AlertCircle, AlertTriangle } from 'lucide-react'
 
 const ACCEPT = '.jpg,.jpeg,.png,.webp,.gif,.tiff,.bmp,.heic,.pdf,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.csv'
 const MAX_MB = 100
@@ -103,6 +103,18 @@ export default function UploadZone({ onFile }: Props) {
           onChange={onInputChange}
         />
       </motion.label>
+
+      {/* Probabilistic disclaimer */}
+      <motion.div
+        initial={{ opacity: 0, y: -4 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="flex items-center gap-3 p-4 rounded-xl bg-amber-500/10 border border-amber-500/40"
+      >
+        <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0" />
+        <p className="text-amber-300 text-sm font-semibold">
+          Results are probabilistic — always combine with human review.
+        </p>
+      </motion.div>
 
       {/* Size error */}
       {sizeError && (
