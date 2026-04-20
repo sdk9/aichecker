@@ -24,6 +24,7 @@ export default function Header() {
     { href: '/analyze', label: 'Detect' },
     { href: '/pricing', label: 'Pricing' },
     { href: '/contact', label: 'Contact' },
+    { href: '/terms', label: 'Terms' },
   ]
 
   const PLAN_BADGE: Record<string, string> = {

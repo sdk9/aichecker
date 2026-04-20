@@ -1,6 +1,8 @@
+import { useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { ShieldCheck, AlertTriangle, Scale, FileText, CreditCard, Lock, Mail } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { useSEO } from '../hooks/useSEO'
 
 const Section = ({ icon: Icon, title, children }: { icon: any; title: string; children: React.ReactNode }) => (
   <motion.div
@@ -20,6 +22,43 @@ const Section = ({ icon: Icon, title, children }: { icon: any; title: string; ch
 )
 
 export default function Terms() {
+  useSEO({
+    title: 'Terms & Conditions — VeritasAI',
+    description:
+      'Read VeritasAI\'s Terms & Conditions. Understand how our AI content detection service works, accuracy expectations (~70–85%), plan limits, payments, privacy, and acceptable use.',
+    canonical: 'https://veritasartificialis.com/terms',
+    ogType: 'article',
+  })
+
+  useEffect(() => {
+    const script = document.createElement('script')
+    script.type = 'application/ld+json'
+    script.id = 'terms-jsonld'
+    script.text = JSON.stringify({
+      '@context': 'https://schema.org',
+      '@type': 'WebPage',
+      name: 'Terms & Conditions — VeritasAI',
+      description:
+        'VeritasAI Terms & Conditions covering service description, accuracy disclaimer, plans, payments, privacy, and acceptable use.',
+      url: 'https://veritasartificialis.com/terms',
+      publisher: {
+        '@type': 'Organization',
+        name: 'VeritasAI',
+        url: 'https://veritasartificialis.com',
+        contactPoint: {
+          '@type': 'ContactPoint',
+          email: 'contact@veritasartificialis.com',
+          contactType: 'customer support',
+        },
+      },
+      dateModified: '2025-04-01',
+    })
+    document.head.appendChild(script)
+    return () => {
+      document.getElementById('terms-jsonld')?.remove()
+    }
+  }, [])
+
   return (
     <div className="min-h-screen py-16 px-4 sm:px-6 lg:px-8 bg-slate-950">
       <div className="max-w-3xl mx-auto">
