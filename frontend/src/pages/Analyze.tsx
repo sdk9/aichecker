@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from 'react'
+import { useSEO } from '../hooks/useSEO'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Link } from 'react-router-dom'
 import { ShieldCheck, ArrowRight } from 'lucide-react'
@@ -12,6 +13,20 @@ import { useAuth } from '../context/AuthContext'
 type Stage = 'upload' | 'analyzing' | 'results'
 
 export default function Analyze() {
+  useSEO({
+    title: 'Detect AI Content — Upload File or Paste Text | VeritasAI',
+    description: 'Upload an image, PDF, Word document, or presentation to instantly detect AI-generated content with forensic accuracy. Free to try.',
+    canonical: 'https://veritasartificialis.com/analyze',
+    keywords: 'detect AI content, AI file scanner, upload AI detector, ChatGPT document detector',
+    schema: {
+      '@context': 'https://schema.org',
+      '@type': 'WebPage',
+      name: 'VeritasAI — Detect AI Content',
+      url: 'https://veritasartificialis.com/analyze',
+      description: 'Upload a file to detect AI-generated content.',
+    },
+  })
+
   const { user } = useAuth()
   const [stage, setStage] = useState<Stage>('upload')
   const [result, setResult] = useState<AnalysisResult | null>(null)

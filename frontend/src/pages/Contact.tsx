@@ -1,8 +1,23 @@
 import { motion } from 'framer-motion'
 import { Mail, MessageSquare, HelpCircle, Lightbulb, ShieldCheck } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { useSEO } from '../hooks/useSEO'
 
 export default function Contact() {
+  useSEO({
+    title: 'Contact VeritasAI — Get Support & Send Feedback',
+    description: 'Contact the VeritasAI team for support, feature requests, partnerships, or any questions about our AI content detection platform.',
+    canonical: 'https://veritasartificialis.com/contact',
+    keywords: 'contact VeritasAI, AI detector support, AI detection help',
+    schema: {
+      '@context': 'https://schema.org',
+      '@type': 'ContactPage',
+      name: 'Contact VeritasAI',
+      url: 'https://veritasartificialis.com/contact',
+      description: 'Contact the VeritasAI team for support and feedback.',
+    },
+  })
+
   return (
     <div className="min-h-screen py-20 px-4 sm:px-6 lg:px-8 bg-slate-950">
       <div className="max-w-2xl mx-auto">

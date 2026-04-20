@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useSEO } from '../hooks/useSEO'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { CheckCircle2, Zap, Building2, Sparkles, AlertCircle } from 'lucide-react'
@@ -45,6 +46,20 @@ const BORDER: Record<string, string> = {
 }
 
 export default function Pricing() {
+  useSEO({
+    title: 'Pricing — VeritasAI AI Content Detection Plans',
+    description: 'Start free with 1 scan/day. Upgrade to Pro for $4.99/month with unlimited AI detection scans for images, PDFs, documents, and presentations.',
+    canonical: 'https://veritasartificialis.com/pricing',
+    keywords: 'AI detector pricing, ChatGPT detector free, AI content detection plans, VeritasAI pro',
+    schema: {
+      '@context': 'https://schema.org',
+      '@type': 'WebPage',
+      name: 'VeritasAI Pricing',
+      url: 'https://veritasartificialis.com/pricing',
+      description: 'Free and Pro plans for AI content detection.',
+    },
+  })
+
   const { user } = useAuth()
   const navigate = useNavigate()
   const [plans, setPlans] = useState<Plan[]>([])

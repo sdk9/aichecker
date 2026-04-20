@@ -1,0 +1,11 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin
+Disallow: /account
+Disallow: /login
+Disallow: /signup
+Disallow: /forgot-password
+Disallow: /reset-password
+
+Sitemap: https://veritasartificialis.com/sitemap.xml

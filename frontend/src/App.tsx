@@ -12,6 +12,9 @@ import Account from './pages/Account'
 import Terms from './pages/Terms'
 import Contact from './pages/Contact'
 import Admin from './pages/Admin'
+import ChatGPTDetector from './pages/ChatGPTDetector'
+import AIImageDetector from './pages/AIImageDetector'
+import AIWritingDetector from './pages/AIWritingDetector'
 
 export default function App() {
   return (
@@ -32,6 +35,9 @@ export default function App() {
           <Route path="/terms" element={<Terms />} />
           <Route path="/contact" element={<Contact />} />
           <Route path="/admin" element={<Admin />} />
+          <Route path="/chatgpt-detector" element={<ChatGPTDetector />} />
+          <Route path="/ai-image-detector" element={<AIImageDetector />} />
+          <Route path="/ai-writing-detector" element={<AIWritingDetector />} />
         </Route>
       </Routes>
     </AuthProvider>

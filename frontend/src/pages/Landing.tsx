@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
+import { useSEO } from '../hooks/useSEO'
 import {
   ShieldCheck, Zap, FileSearch, BarChart3, Download, Cpu,
   Users, ShoppingBag, GraduationCap, Newspaper, Scale,
@@ -13,6 +14,24 @@ const FADE_UP = {
 }
 
 export default function Landing() {
+  useSEO({
+    title: 'VeritasAI — Free AI Content Detector for Images & Documents',
+    description: 'Detect AI-generated images, PDFs, Word documents, presentations and spreadsheets with forensic accuracy. Free ChatGPT detector and AI image detector trusted by HR, legal, and education teams.',
+    canonical: 'https://veritasartificialis.com',
+    keywords: 'AI detector, ChatGPT detector, AI content detection, AI image detector, deepfake detector, GPT detector, detect AI generated content',
+    schema: {
+      '@context': 'https://schema.org',
+      '@type': 'WebPage',
+      name: 'VeritasAI — AI Content Detection',
+      url: 'https://veritasartificialis.com',
+      description: 'Professional AI-generated content detection for images, PDFs, documents, presentations and spreadsheets.',
+      breadcrumb: {
+        '@type': 'BreadcrumbList',
+        itemListElement: [{ '@type': 'ListItem', position: 1, name: 'Home', item: 'https://veritasartificialis.com' }],
+      },
+    },
+  })
+
   return (
     <div className="overflow-x-hidden">
       {/* ── Hero ── */}
