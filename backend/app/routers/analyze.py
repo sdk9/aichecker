@@ -20,7 +20,7 @@ from app.models.analysis import (
     SignalSeverity,
 )
 from app.services.ai_detector import (
-    analyze_audio, analyze_document, analyze_image, analyze_video,
+    analyze_document, analyze_image, analyze_presentation, analyze_spreadsheet,
 )
 from app.services.c2pa import check_c2pa
 from app.services.metadata import extract_metadata
@@ -41,6 +41,7 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
 
 MIME_TO_FILE_TYPE = {
+    # Images
     "image/jpeg": FileType.IMAGE,
     "image/png": FileType.IMAGE,
     "image/webp": FileType.IMAGE,
@@ -49,28 +50,25 @@ MIME_TO_FILE_TYPE = {
     "image/bmp": FileType.IMAGE,
     "image/heic": FileType.IMAGE,
     "image/heif": FileType.IMAGE,
-    "video/mp4": FileType.VIDEO,
-    "video/quicktime": FileType.VIDEO,
-    "video/x-msvideo": FileType.VIDEO,
-    "video/webm": FileType.VIDEO,
-    "video/x-matroska": FileType.VIDEO,
-    "audio/mpeg": FileType.AUDIO,
-    "audio/mp3": FileType.AUDIO,
-    "audio/wav": FileType.AUDIO,
-    "audio/ogg": FileType.AUDIO,
-    "audio/flac": FileType.AUDIO,
-    "audio/aac": FileType.AUDIO,
-    "audio/x-wav": FileType.AUDIO,
+    # Documents
     "application/pdf": FileType.DOCUMENT,
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": FileType.DOCUMENT,
     "application/msword": FileType.DOCUMENT,
+    # Presentations
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": FileType.PRESENTATION,
+    "application/vnd.ms-powerpoint": FileType.PRESENTATION,
+    # Spreadsheets
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": FileType.SPREADSHEET,
+    "application/vnd.ms-excel": FileType.SPREADSHEET,
+    "text/csv": FileType.SPREADSHEET,
+    "text/plain": FileType.SPREADSHEET,  # .csv files sometimes detected as text/plain
 }
 
 ALLOWED_EXTENSIONS = {
     ".jpg", ".jpeg", ".png", ".webp", ".gif", ".tiff", ".bmp", ".heic", ".heif",
-    ".mp4", ".mov", ".avi", ".webm", ".mkv",
-    ".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a",
     ".pdf", ".docx", ".doc",
+    ".pptx", ".ppt",
+    ".xlsx", ".xls", ".csv",
 }
 
 
@@ -86,13 +84,14 @@ def _detect_mime(file_path: Path, original_mime: str) -> str:
         ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
         ".webp": "image/webp", ".gif": "image/gif", ".tiff": "image/tiff",
         ".bmp": "image/bmp",
-        ".mp4": "video/mp4", ".mov": "video/quicktime", ".avi": "video/x-msvideo",
-        ".webm": "video/webm", ".mkv": "video/x-matroska",
-        ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg",
-        ".flac": "audio/flac", ".aac": "audio/aac", ".m4a": "audio/aac",
         ".pdf": "application/pdf",
         ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ".doc": "application/msword",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".ppt": "application/vnd.ms-powerpoint",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".xls": "application/vnd.ms-excel",
+        ".csv": "text/csv",
     }
     return ext_mime.get(ext, original_mime or "application/octet-stream")
 
@@ -184,12 +183,12 @@ async def analyze_file(
         # 3. AI detection
         if file_type == FileType.IMAGE:
             ai_prob, signals = await analyze_image(save_path)
-        elif file_type == FileType.VIDEO:
-            ai_prob, signals = await analyze_video(save_path)
-        elif file_type == FileType.AUDIO:
-            ai_prob, signals = await analyze_audio(save_path)
         elif file_type == FileType.DOCUMENT:
             ai_prob, signals = await analyze_document(save_path, mime_type)
+        elif file_type == FileType.PRESENTATION:
+            ai_prob, signals = await analyze_presentation(save_path, mime_type)
+        elif file_type == FileType.SPREADSHEET:
+            ai_prob, signals = await analyze_spreadsheet(save_path, mime_type)
         else:
             ai_prob = 0.3
             signals = [DetectionSignal(

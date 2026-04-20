@@ -5,22 +5,30 @@ Detection layers (in order of reliability):
   1. ML Neural-Network classifier  — primary signal when available
   2. Forensic heuristics           — corroborating evidence
 
+Supported file types:
+  Images        — JPG / PNG / WebP / GIF / TIFF / BMP / HEIC
+  Documents     — PDF / DOCX / DOC
+  Presentations — PPTX / PPT
+  Spreadsheets  — XLSX / XLS / CSV
+
 Weights when ML is available:
   Images    — ML 60 % + heuristics 40 %
-  Documents — RoBERTa 15 % + GPT-2 perplexity 20 % + heuristics 65 %
-  Audio     — metadata 30 % + format 25 % + spectral 45 %
+  Text docs — RoBERTa 15 % + GPT-2 perplexity 20 % + heuristics 65 %
 
 Weights when ML is NOT available (torch not installed):
   Images    — ELA 28 % + EXIF 18 % + Noise 22 % + Freq 16 % + Color 9 % + Texture 7 %
-  Documents — Template 25 % + Buzzwords 22 % + Burstiness 14 % + Vocab 12 % + Phrases 15 % + Para 7 % + Similarity 5 %
+  Text docs — Template 18 % + Buzzwords 14 % + CV structure 12 % + Achievements 10 % +
+              Skills 9 % + Burstiness 10 % + Vocab 8 % + Phrases 10 % + Para 5 % + Sim 4 %
 """
 
 import io
 import logging
 import math
 import re
+import zipfile
 from pathlib import Path
 from typing import List, Optional, Tuple
+from xml.etree import ElementTree as ET
 
 from app.models.analysis import DetectionSignal, SignalSeverity
 
@@ -122,74 +130,39 @@ def _ml_image_signal(
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def analyze_document(file_path: Path, mime_type: str) -> Tuple[float, List[DetectionSignal]]:
-    """Returns (ai_probability, signals)."""
-    signals: List[DetectionSignal] = []
-
+    """Returns (ai_probability, signals) for PDF and Word documents."""
     text = ""
     try:
         if mime_type == "application/pdf":
             text = _extract_pdf_text(file_path)
+            ai_prob, signals = _analyse_text_content(text)
+            pdf_score, pdf_sig = _pdf_package_signal(file_path, text)
+            signals.append(pdf_sig)
+            if pdf_score >= 0.68:
+                ai_prob = max(ai_prob, min(ai_prob * 0.85 + pdf_score * 0.15, 1.0))
+            if pdf_score >= 0.90:
+                ai_prob = max(ai_prob, 0.84)
+            elif pdf_score >= 0.78:
+                ai_prob = max(ai_prob, 0.72)
+            elif pdf_score >= 0.68:
+                ai_prob = max(ai_prob, 0.62)
+            return ai_prob, signals
         else:
             text = _extract_docx_text(file_path)
-    except Exception:
-        pass
-
-    if not text.strip():
-        signals.append(DetectionSignal(
-            name="Empty Document",
-            description="No extractable text found.",
-            severity=SignalSeverity.LOW,
-            score=0.0,
-        ))
-        return 0.3, signals
-
-    # ── 1. RoBERTa ML classifier ───────────────────────────────────────────
-    ml_prob, _ml_weight = _ml_text_signal(text, signals)
-
-    # ── 2. GPT-2 perplexity (works on short/structured text too) ──────────
-    perp_score, perp_sig = _perplexity_signal(text, signals)
-
-    # ── 3. Template / placeholder detector ────────────────────────────────
-    tmpl_score, tmpl_sig = _template_placeholder_check(text)
-
-    # ── 4. Professional AI buzzwords ──────────────────────────────────────
-    buzz_score, buzz_sig = _professional_buzzwords(text)
-
-    # ── 5-9. Linguistic heuristics ─────────────────────────────────────────
-    burst_score,  burst_sig  = _text_burstiness(text)
-    vocab_score,  vocab_sig  = _vocabulary_richness(text)
-    phrase_score, phrase_sig = _transition_phrases(text)
-    para_score,   para_sig   = _paragraph_homogeneity(text)
-    sim_score,    sim_sig    = _sentence_self_similarity(text)
-
-    signals += [perp_sig, tmpl_sig, buzz_sig, burst_sig, vocab_sig, phrase_sig, para_sig, sim_sig]
-    h_scores = [tmpl_score, buzz_score, burst_score, vocab_score, phrase_score, para_score, sim_score]
-
-    # Perplexity: cap minimum at 0.38 so it can't actively drag scores down
-    # (high-jargon/structured text inflates GPT-2 perplexity unfairly)
-    p = max(perp_score, 0.38) if perp_score is not None else 0.45
-
-    if ml_prob is not None:
-        # RoBERTa 15% + GPT-2 perplexity 20% + heuristics 65%
-        # RoBERTa is down-weighted — it fails on bullet-point / short structured text
-        # Template + buzzwords get highest heuristic weight (most reliable signals)
-        h_weights = [0.18, 0.14, 0.09, 0.07, 0.09, 0.04, 0.04]  # sum = 0.65
-        h_prob = sum(s * w for s, w in zip(h_scores, h_weights))
-        ai_prob = ml_prob * 0.15 + p * 0.20 + h_prob
-    else:
-        # No ML: heuristics carry full weight
-        h_weights = [0.25, 0.22, 0.14, 0.12, 0.15, 0.07, 0.05]  # sum = 1.00
-        ai_prob = sum(s * w for s, w in zip(h_scores, h_weights))
-
-    # High-confidence individual signals set a minimum floor:
-    # Template placeholders or dense buzzwords are near-definitive — don't let
-    # weak signals from other checks drag the score below what they imply.
-    if tmpl_score >= 0.80:
-        ai_prob = max(ai_prob, 0.72)
-    elif buzz_score >= 0.80 and phrase_score >= 0.60:
-        ai_prob = max(ai_prob, 0.62)
-
-    return float(min(max(ai_prob, 0.0), 1.0)), signals
+            ai_prob, signals = _analyse_text_content(text)
+            docx_score, docx_sig = _docx_package_signal(file_path, text)
+            signals.append(docx_sig)
+            # Only boost on suspicious metadata — never let clean metadata pull text score down
+            if docx_score >= 0.72:
+                ai_prob = max(ai_prob, min(ai_prob * 0.88 + docx_score * 0.12, 1.0))
+            if docx_score >= 0.90:
+                ai_prob = max(ai_prob, 0.88)
+            elif docx_score >= 0.72:
+                ai_prob = max(ai_prob, 0.74)
+            return ai_prob, signals
+    except Exception as exc:
+        logger.warning("Document extraction failed: %s", exc)
+    return _analyse_text_content(text)
 
 
 def _ml_text_signal(
@@ -227,80 +200,43 @@ def _ml_text_signal(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# AUDIO ANALYSIS
+# PRESENTATION ANALYSIS (PPTX / PPT)
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def analyze_audio(file_path: Path) -> Tuple[float, List[DetectionSignal]]:
-    """Returns (ai_probability, signals).
-
-    Six-signal pipeline:
-      1. AI tool binary/tag scan  — near-definitive when it hits
-      2. Metadata completeness     — AI tools skip proper tagging
-      3. Format heuristics         — sample rate, duration patterns
-      4. Spectral consistency      — ffmpeg-decoded, works on MP3/AAC
-      5. Dynamic range             — AI music is hyper-compressed
-      6. 30s deep acoustic scan    — spectral flatness, sub-band energy,
-                                     envelope smoothness over a full segment
-    """
-    signals: List[DetectionSignal] = []
-
-    tool_score,     tool_sig     = _audio_ai_tool_scan(file_path)
-    meta_score,     meta_sig     = _audio_metadata_check(file_path)
-    fmt_score,      fmt_sig      = _audio_format_check(file_path)
-    spectral_score, spectral_sig = _audio_spectral_analysis(file_path)
-    dynamic_score,  dynamic_sig  = _audio_dynamic_range(file_path)
-    deep_score,     deep_sig     = _audio_30s_deep_scan(file_path)
-
-    signals += [tool_sig, meta_sig, fmt_sig, spectral_sig, dynamic_sig, deep_sig]
-
-    if tool_score >= 0.75:
-        # AI tool positively identified — use it as primary anchor
-        ai_prob = max(
-            tool_score * 0.40 + meta_score * 0.12 +
-            spectral_score * 0.18 + dynamic_score * 0.15 + deep_score * 0.15,
-            0.75,
-        )
-    else:
-        # No tool marker — acoustic signals drive the score entirely.
-        # tool_score has a floor of 0.20 (no-match), so give it minimal weight
-        # to avoid it dragging down strong acoustic detections.
-        ai_prob = (
-            meta_score     * 0.18 +
-            fmt_score      * 0.10 +
-            spectral_score * 0.25 +
-            dynamic_score  * 0.22 +
-            deep_score     * 0.25
-        )
-        # Soft boost when tool scan is partial (0.50–0.74)
-        if tool_score >= 0.50:
-            ai_prob = max(ai_prob, 0.50)
-
+async def analyze_presentation(file_path: Path, mime_type: str) -> Tuple[float, List[DetectionSignal]]:
+    """Returns (ai_probability, signals) for PowerPoint presentations."""
+    text = ""
+    slide_texts: List[str] = []
+    try:
+        text, slide_texts = _extract_pptx_text(file_path)
+    except Exception as exc:
+        logger.warning("PPTX extraction failed: %s", exc)
+    ai_prob, signals = _analyse_text_content(text)
+    if len(slide_texts) >= 3:
+        slide_score, slide_sig = _slide_structural_uniformity(slide_texts)
+        signals.append(slide_sig)
+        ai_prob = min(float(ai_prob) * 0.88 + float(slide_score) * 0.12, 1.0)
     return float(min(max(ai_prob, 0.0), 1.0)), signals
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# VIDEO ANALYSIS
+# SPREADSHEET ANALYSIS (XLSX / XLS / CSV)
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def analyze_video(file_path: Path) -> Tuple[float, List[DetectionSignal]]:
-    """Returns (ai_probability, signals)."""
-    signals: List[DetectionSignal] = []
-
+async def analyze_spreadsheet(file_path: Path, mime_type: str) -> Tuple[float, List[DetectionSignal]]:
+    """Returns (ai_probability, signals) for Excel and CSV files."""
+    text = ""
     try:
-        frame_score, frame_signals = await _extract_and_analyze_frame(file_path)
-        signals.extend(frame_signals)
-        container_score, container_signal = _video_container_check(file_path)
-        signals.append(container_signal)
-        ai_prob = frame_score * 0.7 + container_score * 0.3
-        return float(min(max(ai_prob, 0.0), 1.0)), signals
+        if mime_type in (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-excel",
+        ):
+            text = _extract_xlsx_text(file_path)
+        else:
+            text = _extract_csv_text(file_path)
     except Exception as exc:
-        signals.append(DetectionSignal(
-            name="Video Analysis",
-            description=f"Frame extraction unavailable: {exc}",
-            severity=SignalSeverity.LOW,
-            score=0.3,
-        ))
-        return 0.3, signals
+        logger.warning("Spreadsheet extraction failed: %s", exc)
+    return _analyse_text_content(text)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -654,10 +590,317 @@ def _extract_pdf_text(file_path: Path) -> str:
         return "\n".join(page.extract_text() or "" for page in reader.pages[:20])
 
 
+def _pdf_package_signal(file_path: Path, text: str) -> Tuple[float, DetectionSignal]:
+    """
+    PDF-specific package analysis.
+    Uses metadata, page structure, and export fingerprints that are invisible
+    to plain text extraction.
+    """
+    score = 0.12
+    findings: list[str] = []
+    creator = ""
+    producer = ""
+    page_count = 0
+    image_pages = 0
+    fontless_pages = 0
+    blank_text_pages = 0
+
+    suspicious_markers = [
+        "chatgpt", "openai", "claude", "anthropic", "gemini", "google ai",
+        "copilot", "notebooklm", "perplexity", "grok",
+        "reportlab", "weasyprint", "wkhtmltopdf", "python", "python-docx",
+        "generated by", "auto-generated", "autogenerated",
+    ]
+
+    try:
+        import PyPDF2
+
+        with open(file_path, "rb") as f:
+            reader = PyPDF2.PdfReader(f)
+            info = reader.metadata or {}
+            page_count = len(reader.pages)
+
+            creator = str(info.get("/Creator", "") or "")
+            producer = str(info.get("/Producer", "") or "")
+            title = str(info.get("/Title", "") or "")
+            author = str(info.get("/Author", "") or "")
+
+            meta_blob = " ".join([creator, producer, title, author]).lower()
+            for marker in suspicious_markers:
+                if marker in meta_blob:
+                    if marker in {"chatgpt", "openai", "claude", "anthropic", "gemini", "copilot"}:
+                        score = max(score, 0.97)
+                    elif marker in {"generated by", "auto-generated", "autogenerated"}:
+                        score = max(score, 0.90)
+                    else:
+                        score = max(score, 0.72)
+                    findings.append(f"metadata marker '{marker}'")
+
+            if not any([creator.strip(), producer.strip(), title.strip(), author.strip()]):
+                score = max(score, 0.52)
+                findings.append("metadata fields largely empty")
+
+            extracted_pages = 0
+            for page in reader.pages[:20]:
+                page_text = (page.extract_text() or "").strip()
+                if page_text:
+                    extracted_pages += 1
+                else:
+                    blank_text_pages += 1
+
+                resources = page.get("/Resources")
+                if resources and hasattr(resources, "get_object"):
+                    resources = resources.get_object()
+                if not isinstance(resources, dict):
+                    continue
+
+                fonts = resources.get("/Font")
+                if fonts and hasattr(fonts, "get_object"):
+                    fonts = fonts.get_object()
+                if not fonts:
+                    fontless_pages += 1
+
+                xobj = resources.get("/XObject")
+                if xobj and hasattr(xobj, "get_object"):
+                    xobj = xobj.get_object()
+                if isinstance(xobj, dict):
+                    has_image = False
+                    for obj in xobj.values():
+                        if hasattr(obj, "get_object"):
+                            obj = obj.get_object()
+                        if isinstance(obj, dict) and obj.get("/Subtype") == "/Image":
+                            has_image = True
+                            break
+                    if has_image:
+                        image_pages += 1
+
+            if page_count >= 1 and image_pages == page_count and blank_text_pages == page_count:
+                score = max(score, 0.76)
+                findings.append("image-only PDF with no extractable text")
+            elif page_count >= 2 and blank_text_pages >= max(2, page_count // 2):
+                score = max(score, 0.62)
+                findings.append("many pages lack extractable text")
+
+            if page_count >= 1 and fontless_pages == page_count and blank_text_pages == page_count and image_pages == page_count:
+                score = max(score, 0.78)
+                findings.append("pages have no font resources despite visible content container")
+
+            extracted_words = len(re.findall(r"\b\w+\b", text))
+            if extracted_words >= 180 and page_count >= 2:
+                words_per_page = extracted_words / page_count
+                if 40 <= words_per_page <= 250:
+                    score = max(score, 0.56)
+                    findings.append("uniform medium-density multi-page layout")
+
+        if not findings:
+            return 0.12, DetectionSignal(
+                name="PDF Package Metadata",
+                description="PDF structure and metadata look broadly typical.",
+                severity=SignalSeverity.LOW,
+                score=0.12,
+                details=f"Creator={creator or 'n/a'} | Producer={producer or 'n/a'} | Pages={page_count}",
+            )
+
+        if score >= 0.90:
+            severity = SignalSeverity.HIGH
+        elif score >= 0.65:
+            severity = SignalSeverity.MEDIUM
+        else:
+            severity = SignalSeverity.LOW
+
+        return score, DetectionSignal(
+            name="PDF Package Metadata",
+            description=(
+                "Internal PDF metadata or page structure shows automation footprints: "
+                + ", ".join(findings[:3]) + "."
+            ),
+            severity=severity,
+            score=score,
+            details=(
+                f"Creator={creator or 'n/a'} | Producer={producer or 'n/a'} | Pages={page_count} | "
+                f"ImagePages={image_pages} | FontlessPages={fontless_pages} | BlankTextPages={blank_text_pages}"
+            ),
+        )
+    except Exception as exc:
+        return 0.35, DetectionSignal(
+            name="PDF Package Metadata",
+            description="Could not inspect PDF package internals.",
+            severity=SignalSeverity.LOW,
+            score=0.35,
+            details=str(exc),
+        )
+
+
+_DOCX_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+
+
+def _read_docx_xml(file_path: Path, member: str) -> Optional[ET.Element]:
+    try:
+        with zipfile.ZipFile(file_path) as zf:
+            return ET.fromstring(zf.read(member))
+    except Exception:
+        return None
+
+
 def _extract_docx_text(file_path: Path) -> str:
-    from docx import Document
-    doc = Document(file_path)
-    return "\n".join(p.text for p in doc.paragraphs)
+    root = _read_docx_xml(file_path, "word/document.xml")
+    if root is None:
+        return ""
+
+    paragraphs: list[str] = []
+    for para in root.findall(".//w:p", _DOCX_NS):
+        text = "".join(node.text or "" for node in para.findall(".//w:t", _DOCX_NS)).strip()
+        if text:
+            paragraphs.append(text)
+    return "\n".join(paragraphs)
+
+
+def _extract_pptx_text(file_path: Path) -> tuple:
+    """Returns (full_text, per_slide_texts) from a PPTX file."""
+    from pptx import Presentation
+    prs = Presentation(file_path)
+    slide_texts = []
+    for slide in prs.slides:
+        parts = []
+        for shape in slide.shapes:
+            if hasattr(shape, "text") and shape.text.strip():
+                parts.append(shape.text.strip())
+        if parts:
+            slide_texts.append("\n".join(parts))
+    return "\n\n".join(slide_texts), slide_texts
+
+
+def _extract_xlsx_text(file_path: Path) -> str:
+    import openpyxl
+    wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+    lines = []
+    for sheet in wb.worksheets:
+        for row in sheet.iter_rows():
+            row_vals = [
+                str(c.value).strip()
+                for c in row
+                if c.value and isinstance(c.value, str) and str(c.value).strip()
+            ]
+            if row_vals:
+                lines.append(" | ".join(row_vals))
+    wb.close()
+    return "\n".join(lines)
+
+
+def _extract_csv_text(file_path: Path) -> str:
+    import csv
+    lines = []
+    with open(file_path, newline="", encoding="utf-8-sig", errors="replace") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            parts = [cell.strip() for cell in row if cell.strip()]
+            if parts:
+                lines.append(" | ".join(parts))
+    return "\n".join(lines)
+
+
+def _docx_package_signal(file_path: Path, text: str) -> Tuple[float, DetectionSignal]:
+    """
+    DOCX-specific automation footprint analysis.
+    Looks for package metadata and generation quirks that ordinary authored
+    Word files usually do not exhibit.
+    """
+    signals = []
+    score = 0.10
+    creator = ""
+    description = ""
+    application = ""
+    words = 0
+    paragraphs = 0
+    media_count = 0
+
+    try:
+        with zipfile.ZipFile(file_path) as zf:
+            names = set(zf.namelist())
+            media_count = sum(1 for name in names if name.startswith("word/media/"))
+
+            core_root = ET.fromstring(zf.read("docProps/core.xml")) if "docProps/core.xml" in names else None
+            app_root = ET.fromstring(zf.read("docProps/app.xml")) if "docProps/app.xml" in names else None
+
+        if core_root is not None:
+            values = {child.tag.split("}")[-1]: (child.text or "").strip() for child in core_root}
+            creator = values.get("creator", "")
+            description = values.get("description", "")
+            created = values.get("created", "")
+            modified = values.get("modified", "")
+            revision = values.get("revision", "")
+
+            generator_markers = " ".join([creator, description]).lower()
+            if "python-docx" in generator_markers:
+                score = max(score, 0.96)
+                signals.append("python-docx generator metadata")
+            elif any(marker in generator_markers for marker in ("generated by", "auto-generated", "autogenerated")):
+                score = max(score, 0.84)
+                signals.append("explicit generated-by metadata")
+
+            if created and modified and created == modified and created.startswith("2013-12-23"):
+                score = max(score, 0.82)
+                signals.append("default python-docx template timestamp")
+
+            if revision in ("", "0", "1") and len(text.split()) > 120:
+                score = max(score, 0.66)
+                signals.append("substantial content with first-revision metadata")
+
+        if app_root is not None:
+            values = {child.tag.split("}")[-1]: (child.text or "").strip() for child in app_root}
+            application = values.get("Application", "")
+            words = int(values.get("Words", "0") or 0)
+            paragraphs = int(values.get("Paragraphs", "0") or 0)
+
+            extracted_words = len(re.findall(r"\b\w+\b", text))
+            if extracted_words >= 80 and words == 0:
+                score = max(score, 0.76)
+                signals.append("app.xml word count left at zero")
+            if len(text.splitlines()) >= 12 and paragraphs == 0:
+                score = max(score, 0.72)
+                signals.append("app.xml paragraph count left at zero")
+
+        if media_count >= 8 and len(text.split()) >= 180:
+            score = max(score, 0.62)
+            signals.append("heavily templated docx package with many embedded media assets")
+
+        if not signals:
+            return 0.12, DetectionSignal(
+                name="DOCX Package Metadata",
+                description="DOCX package metadata looks broadly typical.",
+                severity=SignalSeverity.LOW,
+                score=0.12,
+                details=f"Creator={creator or 'n/a'} | Application={application or 'n/a'} | Media={media_count}",
+            )
+
+        if score >= 0.90:
+            severity = SignalSeverity.HIGH
+        elif score >= 0.65:
+            severity = SignalSeverity.MEDIUM
+        else:
+            severity = SignalSeverity.LOW
+
+        return score, DetectionSignal(
+            name="DOCX Package Metadata",
+            description=(
+                "Internal Word package metadata shows automation footprints: "
+                + ", ".join(signals[:3]) + "."
+            ),
+            severity=severity,
+            score=score,
+            details=(
+                f"Creator={creator or 'n/a'} | Description={description or 'n/a'} | "
+                f"Application={application or 'n/a'} | Words={words} | Paragraphs={paragraphs} | Media={media_count}"
+            ),
+        )
+    except Exception as exc:
+        return 0.35, DetectionSignal(
+            name="DOCX Package Metadata",
+            description="Could not inspect DOCX package internals.",
+            severity=SignalSeverity.LOW,
+            score=0.35,
+            details=str(exc),
+        )
 
 
 def _split_into_units(text: str):
@@ -797,7 +1040,7 @@ def _transition_phrases(text: str) -> Tuple[float, DetectionSignal]:
     total_hits = sum(c for _, c in found)
     density    = total_hits / (word_count / 100)
 
-    if density > 3.0:
+    if density > 2.0:
         score, severity = 0.80, SignalSeverity.HIGH
         top  = sorted(found, key=lambda x: x[1], reverse=True)[:5]
         desc = f"High AI phrase density ({density:.1f}/100 words). Top phrases: {', '.join(p for p, _ in top)}"
@@ -1062,6 +1305,582 @@ def _professional_buzzwords(text: str) -> Tuple[float, DetectionSignal]:
         score=score,
         details=f"Density={density:.2f}/100 words | Unique buzzwords: {len(found)}",
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HR-SPECIFIC DETECTION SIGNALS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cv_section_structure(text: str) -> Tuple[float, DetectionSignal]:
+    """
+    Detect rigid AI CV template section headers.
+    AI-generated CVs follow a predictable, identical section pattern every time.
+    """
+    STANDARD_SECTIONS = [
+        r"\bprofessional summary\b", r"\bcareer objective\b", r"\bobjective\b",
+        r"\bwork experience\b", r"\bprofessional experience\b", r"\bemployment history\b",
+        r"\beducation\b", r"\bskills\b", r"\bcore competencies\b",
+        r"\bcertifications?\b", r"\bcertificates?\b", r"\bvolunteer\b",
+        r"\bextra.?curricular\b", r"\bhobbies\b", r"\breferences\b",
+        r"\bpublications?\b", r"\bawards?\b", r"\bkey skills\b",
+        r"\btechnical skills\b", r"\blanguages\b", r"\bachievements?\b",
+        r"\bprofile\b", r"\bsummary\b", r"\binterests?\b",
+    ]
+    lower = text.lower()
+    found = [p for p in STANDARD_SECTIONS if re.search(p, lower)]
+    count = len(found)
+
+    if count >= 6:
+        score, severity = 0.85, SignalSeverity.HIGH
+        desc = (
+            f"Detected {count} standard CV section headers. AI tools produce rigidly "
+            "templated CVs with identical section structures — Professional Summary, "
+            "Work Experience, Education, Skills, Certifications, References."
+        )
+    elif count >= 4:
+        score, severity = 0.65, SignalSeverity.MEDIUM
+        desc = f"Detected {count} standard CV/document section headers. Moderately templated structure."
+    elif count >= 2:
+        score, severity = 0.35, SignalSeverity.LOW
+        desc = f"Detected {count} standard section headers. Low structural signal."
+    else:
+        score, severity = 0.05, SignalSeverity.LOW
+        desc = "No rigid CV/document section structure detected."
+
+    return score, DetectionSignal(
+        name="CV Section Structure",
+        description=desc,
+        severity=severity,
+        score=score,
+        details=f"Standard section headers found: {count}",
+    )
+
+
+def _achievement_claim_density(text: str) -> Tuple[float, DetectionSignal]:
+    """
+    Detect vague quantified achievement claims.
+    AI models fill CVs with impressive-sounding but unverifiable percentage metrics.
+    """
+    ACHIEVEMENT_PATTERNS = [
+        r"\b(?:increased|improved|boosted|grew|enhanced|raised)\b.{0,50}\b\d+\s*%",
+        r"\b(?:reduced|decreased|cut|lowered|minimized|minimised)\b.{0,50}\b\d+\s*%",
+        r"\b(?:saved|generated|drove|delivered|achieved)\b.{0,50}\b\d+\s*%",
+        r"\b(?:exceeded|surpassed|outperformed)\b.{0,50}\b(?:target|goal|kpi|quota)",
+        r"\b\d+\s*%\s+(?:increase|improvement|reduction|growth|efficiency)",
+        r"\btop\s+\d+\s*%\b",
+        r"\bover\s+\d+\s+(?:years?|months?)\s+of\s+experience\b",
+        r"\b(?:successfully|consistently)\s+(?:delivered|met|exceeded|achieved)\b",
+        r"\bkey\s+(?:contributor|player|driver)\b",
+        r"\bresulted?\s+in\s+(?:a\s+)?\d+",
+        r"\b(?:spearheaded|championed|orchestrated)\b.{0,40}\b(?:leading|resulting|achieving)",
+        r"\bimpact(?:ed|ful)\b.{0,30}\b(?:\d+|\bmillion\b|\bthousand\b)",
+    ]
+    lower = text.lower()
+    hits = []
+    for pat in ACHIEVEMENT_PATTERNS:
+        hits.extend(re.findall(pat, lower))
+
+    count = len(hits)
+    word_count = max(len(text.split()), 1)
+    density = count / (word_count / 100)
+
+    if count >= 5 or density > 2.0:
+        score, severity = 0.82, SignalSeverity.HIGH
+        desc = (
+            f"High density of vague achievement claims ({count} found, {density:.1f}/100 words). "
+            "AI models saturate CVs with unverifiable metrics: 'increased efficiency by 30%', "
+            "'reduced costs by 25%', 'exceeded KPIs consistently'."
+        )
+    elif count >= 2 or density > 0.8:
+        score, severity = 0.55, SignalSeverity.MEDIUM
+        desc = f"Moderate achievement claim density ({count} claims). Common pattern in AI-generated professional documents."
+    elif count >= 1:
+        score, severity = 0.25, SignalSeverity.LOW
+        desc = f"Low achievement claim density ({count} claims found)."
+    else:
+        score, severity = 0.05, SignalSeverity.LOW
+        desc = "No suspicious vague achievement claim patterns detected."
+
+    return score, DetectionSignal(
+        name="Achievement Claim Density",
+        description=desc,
+        severity=severity,
+        score=score,
+        details=f"Claims found: {count} | Density: {density:.2f}/100 words",
+    )
+
+
+def _skill_list_density(text: str) -> Tuple[float, DetectionSignal]:
+    """
+    Detect unrealistically long skill/technology lists.
+    AI-generated CVs enumerate an implausibly large and diverse set of skills.
+    """
+    TECH_SEPARATORS = re.compile(r"[,|•·▪\-–—/]")
+    SKILL_PATTERN = re.compile(
+        r"\b(?:python|java(?:script)?|typescript|react|angular|vue|node|sql|"
+        r"excel|powerpoint|word|sap|salesforce|jira|git|aws|azure|gcp|"
+        r"tableau|power\s*bi|agile|scrum|kanban|lean|six\s*sigma|"
+        r"c\+\+|c#|\.net|php|ruby|swift|kotlin|docker|kubernetes|"
+        r"machine\s*learning|deep\s*learning|nlp|data\s*analysis|"
+        r"communication|leadership|management|microsoft\s*office|"
+        r"google\s*workspace|crm|erp|html|css|rest\s*api|ci/cd|devops)\b",
+        re.IGNORECASE,
+    )
+
+    lines = text.split("\n")
+    total_skill_items = 0
+    max_skills_line = 0
+
+    for line in lines:
+        items = [s.strip() for s in TECH_SEPARATORS.split(line) if s.strip()]
+        if len(items) >= 3:
+            skill_count = sum(
+                1 for item in items
+                if SKILL_PATTERN.search(item) or len(item.split()) <= 3
+            )
+            if skill_count >= 3:
+                total_skill_items += skill_count
+                max_skills_line = max(max_skills_line, skill_count)
+
+    skill_keyword_count = len(SKILL_PATTERN.findall(text))
+
+    if total_skill_items >= 15 or skill_keyword_count >= 20:
+        score, severity = 0.80, SignalSeverity.HIGH
+        desc = (
+            f"Implausibly dense skill enumeration ({total_skill_items} listed items, "
+            f"{skill_keyword_count} technology keywords). AI-generated CVs list an "
+            "unrealistically broad range of skills to appear more qualified."
+        )
+    elif total_skill_items >= 8 or skill_keyword_count >= 12:
+        score, severity = 0.55, SignalSeverity.MEDIUM
+        desc = f"High skill density ({total_skill_items} list items, {skill_keyword_count} keywords). Common in AI-written CVs."
+    elif total_skill_items >= 4 or skill_keyword_count >= 6:
+        score, severity = 0.28, SignalSeverity.LOW
+        desc = f"Moderate skill density ({total_skill_items} items, {skill_keyword_count} keywords)."
+    else:
+        score, severity = 0.05, SignalSeverity.LOW
+        desc = "Normal skill enumeration. No unusual density detected."
+
+    return score, DetectionSignal(
+        name="Skill List Density",
+        description=desc,
+        severity=severity,
+        score=score,
+        details=f"Listed items: {total_skill_items} | Skill keywords: {skill_keyword_count} | Max per line: {max_skills_line}",
+    )
+
+
+def _slide_structural_uniformity(slide_texts: list) -> Tuple[float, DetectionSignal]:
+    """
+    Detect AI presentations by per-slide word count uniformity.
+    AI-generated presentations produce slides with nearly identical content lengths.
+    """
+    lengths = [len(s.split()) for s in slide_texts if s.strip()]
+    if len(lengths) < 3:
+        return 0.30, DetectionSignal(
+            name="Slide Structure Uniformity",
+            description="Too few slides to assess uniformity.",
+            severity=SignalSeverity.LOW,
+            score=0.30,
+        )
+
+    mean_l = sum(lengths) / len(lengths)
+    std_l = math.sqrt(sum((x - mean_l) ** 2 for x in lengths) / len(lengths))
+    cv = std_l / (mean_l + 1e-6)
+
+    AI_SLIDE_TITLES = [
+        "introduction", "overview", "background", "agenda", "conclusion",
+        "summary", "thank you", "questions", "key takeaways", "next steps",
+        "recommendations", "objectives", "scope",
+    ]
+    first_words = []
+    for s in slide_texts[:4]:
+        words = s.strip().split()
+        if words:
+            first_words.append(words[0].lower().rstrip(":"))
+    title_hits = sum(1 for w in first_words if any(t.startswith(w) or w.startswith(t) for t in AI_SLIDE_TITLES))
+
+    if cv < 0.25:
+        score, severity = 0.80, SignalSeverity.HIGH
+        desc = (
+            f"Highly uniform slide content lengths (CV={cv:.2f}, mean={mean_l:.0f} words/slide). "
+            "AI-generated presentations produce slides with near-identical word counts."
+        )
+    elif cv < 0.45:
+        score, severity = 0.48, SignalSeverity.MEDIUM
+        desc = f"Moderately uniform slide structure (CV={cv:.2f})."
+    else:
+        score, severity = 0.15, SignalSeverity.LOW
+        desc = f"Natural slide length variation (CV={cv:.2f})."
+
+    if title_hits >= 2:
+        score = min(score + 0.12, 0.92)
+        desc += f" Generic AI slide titles detected in opening slides ({title_hits} matches)."
+        if severity == SignalSeverity.LOW:
+            severity = SignalSeverity.MEDIUM
+
+    return score, DetectionSignal(
+        name="Slide Structure Uniformity",
+        description=desc,
+        severity=severity,
+        score=score,
+        details=f"Slides: {len(lengths)} | Mean words/slide: {mean_l:.0f} | CV: {cv:.3f} | Title hits: {title_hits}",
+    )
+
+
+def _cover_letter_patterns(text: str) -> Tuple[float, DetectionSignal]:
+    """
+    Detect AI-generated professional prose patterns in cover letters and summaries.
+    These specific constructions are heavily over-represented in AI-generated professional text.
+    """
+    PATTERNS = [
+        r"\bI am (?:writing|excited|thrilled|delighted|pleased) to (?:apply|express|submit|introduce)",
+        r"\bI am a (?:highly|results|detail|passionate|dedicated|motivated|self-motivated|driven)",
+        r"\bhave (?:a )?(?:strong|proven|solid|extensive|deep|broad) (?:background|experience|expertise|foundation) in",
+        r"\bI would (?:welcome|value|appreciate|love) the opportunity",
+        r"\bI look forward to (?:discussing|hearing from|speaking with|the opportunity|connecting)",
+        r"\bthank you for (?:your|the) (?:time|consideration|opportunity|review)",
+        r"\bI am confident (?:that|in my|I can|I will)",
+        r"\bmy (?:strong|extensive|solid|diverse|broad|unique) (?:background|experience|skill set|expertise|qualifications)",
+        r"\bpassion(?:ate)? (?:for|about) (?:this|the) (?:role|position|field|industry|opportunity|company)",
+        r"\bI (?:possess|bring|offer) (?:a|an|strong|extensive|unique|diverse)",
+        r"\bI am eager to (?:contribute|join|bring|apply|learn|grow|leverage)",
+        r"\bmy (?:commitment|dedication|drive|passion|enthusiasm) to",
+        r"\bseek(?:ing)? to (?:contribute|leverage|utilize|apply|join|grow)",
+        r"\bopportunity to (?:contribute|join|grow|develop|work with|be part)",
+        r"\bwith (?:my|a|an|over) (?:\d+ )?(?:years?|strong|extensive|proven) (?:of )?(?:experience|background)",
+        r"\bI (?:successfully|consistently|effectively|efficiently) (?:managed|led|delivered|achieved|developed|implemented)",
+        r"\bwould be (?:a )?(?:great|perfect|excellent|ideal|strong|valuable) (?:fit|match|addition|asset)",
+        r"\bI am (?:particularly|especially|genuinely|truly|deeply) (?:excited|interested|passionate|motivated) (?:about|by|in)",
+        r"\bI have (?:always|long) been (?:passionate|fascinated|interested|motivated)",
+        r"\bI am a (?:highly|results|goal|customer|team|data|detail|self)-\w+",
+    ]
+    lower = text.lower()
+    found_count = sum(1 for pat in PATTERNS if re.search(pat, lower))
+    word_count = max(len(text.split()), 1)
+    density = found_count / (word_count / 100)
+
+    if found_count >= 5 or density > 1.5:
+        score, severity = 0.88, SignalSeverity.HIGH
+        desc = (
+            f"Heavy use of AI cover letter templates ({found_count} patterns). "
+            "Phrases like 'I am passionate about', 'I look forward to', 'I am confident that' "
+            "are characteristic of AI-generated professional prose."
+        )
+    elif found_count >= 3 or density > 0.8:
+        score, severity = 0.72, SignalSeverity.HIGH
+        desc = f"Multiple AI professional prose patterns detected ({found_count}). Common in AI-generated cover letters and summaries."
+    elif found_count >= 1 or density > 0.3:
+        score, severity = 0.42, SignalSeverity.MEDIUM
+        desc = f"Some AI professional prose patterns detected ({found_count})."
+    else:
+        score, severity = 0.05, SignalSeverity.LOW
+        desc = "No characteristic AI cover letter patterns detected."
+
+    return score, DetectionSignal(
+        name="AI Professional Prose Patterns",
+        description=desc,
+        severity=severity,
+        score=score,
+        details=f"Patterns matched: {found_count} | Density: {density:.2f}/100 words",
+    )
+
+
+def _action_verb_density(text: str) -> Tuple[float, DetectionSignal]:
+    """
+    Detect AI CV bullet point patterns.
+    AI-generated CVs consistently open bullet points with the same narrow set of action verbs.
+    """
+    AI_ACTION_VERBS = {
+        "managed", "led", "developed", "implemented", "coordinated", "collaborated",
+        "achieved", "spearheaded", "ensured", "facilitated", "oversaw", "executed",
+        "delivered", "streamlined", "optimized", "leveraged", "drove", "championed",
+        "orchestrated", "established", "maintained", "supported", "utilized",
+        "conducted", "created", "designed", "built", "improved", "enhanced",
+        "increased", "reduced", "analyzed", "evaluated", "identified", "provided",
+        "prepared", "presented", "communicated", "fostered", "generated",
+        "contributed", "overseeing", "leading", "managing", "developing",
+        "implementing", "liaised", "liaising", "monitored", "ensured",
+    }
+    lines = text.split("\n")
+    bullet_starts = []
+    total_content_lines = 0
+    for line in lines:
+        stripped = line.strip().lstrip("•·▪-–—*>0123456789.").strip()
+        if stripped and len(stripped.split()) >= 3:
+            total_content_lines += 1
+            first_word = stripped.split()[0].lower().rstrip(".,;:")
+            if first_word in AI_ACTION_VERBS:
+                bullet_starts.append(first_word)
+
+    if total_content_lines < 4:
+        return 0.25, DetectionSignal(
+            name="Action Verb Patterns",
+            description="Too few lines for action verb analysis.",
+            severity=SignalSeverity.LOW,
+            score=0.25,
+        )
+
+    ratio = len(bullet_starts) / max(total_content_lines, 1)
+    unique_verbs = len(set(bullet_starts))
+
+    if ratio >= 0.45 and unique_verbs >= 5:
+        score, severity = 0.82, SignalSeverity.HIGH
+        top = sorted(set(bullet_starts), key=lambda v: bullet_starts.count(v), reverse=True)[:5]
+        desc = (
+            f"Heavy use of AI-typical action verbs ({ratio:.0%} of lines, {unique_verbs} unique). "
+            f"Top: {', '.join(top)}. AI CVs consistently open bullets with the same action verbs."
+        )
+    elif ratio >= 0.30 and unique_verbs >= 3:
+        score, severity = 0.55, SignalSeverity.MEDIUM
+        desc = f"Elevated action verb dependency ({ratio:.0%} of lines use AI-typical verb starters)."
+    elif ratio >= 0.15:
+        score, severity = 0.25, SignalSeverity.LOW
+        desc = f"Moderate action verb usage ({ratio:.0%} of lines)."
+    else:
+        score, severity = 0.08, SignalSeverity.LOW
+        desc = "Low action verb repetition. Natural writing variation detected."
+
+    return score, DetectionSignal(
+        name="Action Verb Patterns",
+        description=desc,
+        severity=severity,
+        score=score,
+        details=f"Ratio: {ratio:.1%} | Unique verbs: {unique_verbs} | Action starts: {len(bullet_starts)}/{total_content_lines}",
+    )
+
+
+_COMMON_ENGLISH = {
+    "the", "and", "to", "of", "a", "in", "is", "it", "you", "that", "he",
+    "was", "for", "on", "are", "as", "with", "his", "they", "at", "be",
+    "this", "from", "or", "an", "by", "have", "not", "but", "we", "what",
+    "which", "one", "had", "your", "can", "has", "will", "more", "if",
+    "about", "up", "out", "do", "their", "all", "would", "there", "when",
+    "use", "any", "how", "each", "she", "her", "than", "then", "its", "my",
+    "into", "been", "also", "through", "time", "no", "so", "our", "new",
+    "who", "me", "should", "just", "over", "these", "may", "after", "first",
+    "work", "well", "way", "even", "only", "such", "much", "because", "too",
+}
+
+
+def _english_word_ratio(text: str) -> float:
+    """Returns fraction of tokens that are common English function words."""
+    words = re.findall(r"\b[a-z]+\b", text.lower())
+    if len(words) < 20:
+        return 1.0
+    return sum(1 for w in words if w in _COMMON_ENGLISH) / len(words)
+
+
+def _document_section_uniformity(text: str) -> Tuple[float, DetectionSignal]:
+    """
+    Language-agnostic structural uniformity detector.
+    AI generators produce documents with near-identical section sizes.
+    Works on workout plans, lesson plans, guides — anything structured.
+    """
+    blocks = [b.strip() for b in re.split(r"\n{2,}", text) if b.strip() and len(b.split()) >= 8]
+    if len(blocks) < 3:
+        blocks = [b.strip() for b in text.split("\n") if b.strip() and len(b.split()) >= 8]
+
+    if len(blocks) < 3:
+        return 0.25, DetectionSignal(
+            name="Section Structure Uniformity",
+            description="Too few sections to assess structural uniformity.",
+            severity=SignalSeverity.LOW,
+            score=0.25,
+        )
+
+    lengths = [len(b.split()) for b in blocks]
+    mean_l = sum(lengths) / len(lengths)
+    std_l = math.sqrt(sum((x - mean_l) ** 2 for x in lengths) / len(lengths))
+    cv = std_l / (mean_l + 1e-6)
+
+    if cv < 0.18:
+        score, severity = 0.82, SignalSeverity.HIGH
+        desc = (
+            f"Highly uniform section lengths (CV={cv:.2f}, mean={mean_l:.0f} words/block, "
+            f"{len(blocks)} sections). AI-generated structured documents have near-identical section sizes."
+        )
+    elif cv < 0.32:
+        score, severity = 0.55, SignalSeverity.MEDIUM
+        desc = f"Moderately uniform section lengths (CV={cv:.2f}). Some structural repetition detected."
+    elif cv < 0.50:
+        score, severity = 0.28, SignalSeverity.LOW
+        desc = f"Slight uniformity in section lengths (CV={cv:.2f})."
+    else:
+        score, severity = 0.10, SignalSeverity.LOW
+        desc = f"Natural section length variation (CV={cv:.2f})."
+
+    return score, DetectionSignal(
+        name="Section Structure Uniformity",
+        description=desc,
+        severity=severity,
+        score=score,
+        details=f"Blocks: {len(blocks)} | Mean words: {mean_l:.0f} | CV: {cv:.3f}",
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CORE TEXT ANALYSIS PIPELINE (shared by document, presentation, spreadsheet)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _analyse_text_content(text: str) -> Tuple[float, List[DetectionSignal]]:
+    """
+    Full multi-signal AI text detection pipeline.
+    Used by analyze_document, analyze_presentation, and analyze_spreadsheet.
+    """
+    signals: List[DetectionSignal] = []
+
+    if not text.strip():
+        signals.append(DetectionSignal(
+            name="Empty Content",
+            description="No extractable text found in this file.",
+            severity=SignalSeverity.LOW,
+            score=0.0,
+        ))
+        return 0.3, signals
+
+    # Detect document language early — determines which signal path to use
+    eng_ratio = _english_word_ratio(text)
+    is_english = eng_ratio > 0.07  # < 7% common English function words = non-English
+
+    # ── Language-agnostic structural signal (always computed) ─────────────
+    section_score, section_sig = _document_section_uniformity(text)
+
+    # ── Language-agnostic signals (reliable for any language) ─────────────
+    burst_score,  burst_sig  = _text_burstiness(text)
+    vocab_score,  vocab_sig  = _vocabulary_richness(text)
+    para_score,   para_sig   = _paragraph_homogeneity(text)
+    sim_score,    sim_sig    = _sentence_self_similarity(text)
+
+    if not is_english:
+        # Non-English document: English ML models and pattern signals are unreliable.
+        # Use only language-agnostic structural signals.
+        signals += [section_sig, burst_sig, vocab_sig, para_sig, sim_sig]
+        signals.append(DetectionSignal(
+            name="Non-English Document Detected",
+            description=(
+                f"Document is not in English (English word ratio: {eng_ratio:.1%}). "
+                "English-specific pattern signals cannot be applied. "
+                "Structural uniformity and statistical signals used. "
+                "Manual review recommended for non-English documents."
+            ),
+            severity=SignalSeverity.MEDIUM,
+            score=0.5,
+            details=f"English word ratio: {eng_ratio:.3f}",
+        ))
+
+        # Language-agnostic weighted scoring
+        lang_scores   = [section_score, burst_score, vocab_score, para_score, sim_score]
+        lang_weights  = [0.35,          0.28,        0.15,        0.14,       0.08]  # sum=1.00
+        h_prob = sum(s * w for s, w in zip(lang_scores, lang_weights))
+
+        # Base floor: cannot confidently clear non-English documents — default to "Uncertain"
+        ai_prob = max(h_prob, 0.42)
+
+        # Consensus floor for language-agnostic signals
+        high_lang = sum(1 for s in lang_scores if s >= 0.65)
+        if high_lang >= 3:
+            ai_prob = max(ai_prob, 0.82)
+        elif high_lang >= 2:
+            ai_prob = max(ai_prob, 0.70)
+        elif high_lang >= 1:
+            ai_prob = max(ai_prob, 0.58)
+
+        # Section uniformity + burstiness combo flags structured AI content
+        if section_score >= 0.55 and burst_score >= 0.45:
+            ai_prob = max(ai_prob, 0.65)
+        if section_score >= 0.75 and burst_score >= 0.55:
+            ai_prob = max(ai_prob, 0.75)
+
+        return float(min(max(ai_prob, 0.0), 1.0)), signals
+
+    # ── English path: full signal suite ───────────────────────────────────
+
+    # ── 1. RoBERTa ML classifier ───────────────────────────────────────────
+    ml_prob, _ml_weight = _ml_text_signal(text, signals)
+
+    # ── 2. GPT-2 perplexity ────────────────────────────────────────────────
+    perp_score, perp_sig = _perplexity_signal(text, signals)
+
+    # ── 3. Template placeholders ──────────────────────────────────────────
+    tmpl_score, tmpl_sig = _template_placeholder_check(text)
+
+    # ── 4. Professional AI buzzwords ──────────────────────────────────────
+    buzz_score, buzz_sig = _professional_buzzwords(text)
+
+    # ── 5. CV / document section structure ────────────────────────────────
+    cv_score, cv_sig = _cv_section_structure(text)
+
+    # ── 6. Vague achievement claims ───────────────────────────────────────
+    ach_score, ach_sig = _achievement_claim_density(text)
+
+    # ── 7. Skill list density ─────────────────────────────────────────────
+    skill_score, skill_sig = _skill_list_density(text)
+
+    # ── 8. English-specific linguistic heuristics ─────────────────────────
+    phrase_score, phrase_sig = _transition_phrases(text)
+    action_score, action_sig = _action_verb_density(text)
+    cover_score,  cover_sig  = _cover_letter_patterns(text)
+
+    signals += [
+        perp_sig, tmpl_sig, buzz_sig, cv_sig, ach_sig, skill_sig,
+        burst_sig, vocab_sig, phrase_sig, para_sig, sim_sig,
+        action_sig, cover_sig, section_sig,
+    ]
+
+    # Perplexity: floor at 0.38 — jargon/structured text inflates GPT-2 perplexity
+    p = max(perp_score, 0.38) if perp_score is not None else 0.45
+
+    h_scores = [
+        tmpl_score, buzz_score, cv_score, ach_score, skill_score,
+        burst_score, vocab_score, phrase_score, para_score, sim_score,
+        action_score, cover_score,
+    ]
+
+    # Count how many signals strongly indicate AI content
+    high_count = sum(1 for s in h_scores if s >= 0.65)
+
+    if ml_prob is not None and ml_prob >= 0.25:
+        # RoBERTa has a meaningful signal — use full ML blend
+        # RoBERTa 15% + perplexity 20% + heuristics 65%
+        h_weights = [0.10, 0.08, 0.07, 0.06, 0.05, 0.06, 0.04, 0.06, 0.02, 0.02, 0.05, 0.04]  # sum=0.65
+        h_prob = sum(s * w for s, w in zip(h_scores, h_weights))
+        ai_prob = ml_prob * 0.15 + p * 0.20 + h_prob
+    else:
+        # RoBERTa unavailable or unreliable on this text type
+        h_weights = [0.15, 0.11, 0.10, 0.08, 0.08, 0.09, 0.07, 0.08, 0.03, 0.03, 0.07, 0.06]  # sum=0.95
+        h_prob = sum(s * w for s, w in zip(h_scores, h_weights))
+        ai_prob = h_prob * 0.80 + p * 0.20
+
+    # Section uniformity adds an independent boost for English docs too
+    if section_score >= 0.72:
+        ai_prob = max(ai_prob, min(ai_prob + (section_score - 0.72) * 0.5, 1.0))
+
+    # Signal consensus floor
+    if high_count >= 6:
+        ai_prob = max(ai_prob, 0.88)
+    elif high_count >= 5:
+        ai_prob = max(ai_prob, 0.82)
+    elif high_count >= 4:
+        ai_prob = max(ai_prob, 0.75)
+    elif high_count >= 3:
+        ai_prob = max(ai_prob, 0.65)
+
+    # Individual strong signal floors (independent — not elif so multiple can fire)
+    if tmpl_score >= 0.80:
+        ai_prob = max(ai_prob, 0.78)
+    if cover_score >= 0.70 and (buzz_score >= 0.50 or phrase_score >= 0.45):
+        ai_prob = max(ai_prob, 0.72)
+    if cv_score >= 0.75 and buzz_score >= 0.55:
+        ai_prob = max(ai_prob, 0.72)
+    if buzz_score >= 0.80 and phrase_score >= 0.45:
+        ai_prob = max(ai_prob, 0.68)
+    if ach_score >= 0.75 and skill_score >= 0.55:
+        ai_prob = max(ai_prob, 0.65)
+    if action_score >= 0.75 and (cv_score >= 0.50 or buzz_score >= 0.50):
+        ai_prob = max(ai_prob, 0.68)
+
+    return float(min(max(ai_prob, 0.0), 1.0)), signals
 
 
 # ─────────────────────────────────────────────────────────────────────────────

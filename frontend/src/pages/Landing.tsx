@@ -3,8 +3,8 @@ import { motion } from 'framer-motion'
 import {
   ShieldCheck, Zap, FileSearch, BarChart3, Download, Cpu,
   Users, ShoppingBag, GraduationCap, Newspaper, Scale,
-  ArrowRight, CheckCircle2, Lock, Globe, ImageIcon, Video,
-  Music, FileText,
+  ArrowRight, CheckCircle2, Lock, Globe, ImageIcon,
+  FileText, Presentation, Table2,
 } from 'lucide-react'
 
 const FADE_UP = {
@@ -61,9 +61,10 @@ export default function Landing() {
             custom={2}
             className="text-xl text-slate-400 max-w-2xl mx-auto mb-10 leading-relaxed"
           >
-            Upload images, video, audio, or documents. VeritasAI runs forensic
-            analysis — metadata, C2PA credentials, frequency patterns — and gives
-            you a confidence score with downloadable evidence report.
+            Built for HR teams and recruiters. Upload CVs, cover letters,
+            presentations, spreadsheets, or profile photos. VeritasAI runs
+            12+ forensic signals and gives you a confidence score with
+            downloadable evidence report.
           </motion.p>
 
           <motion.div
@@ -90,10 +91,10 @@ export default function Landing() {
             className="flex flex-wrap justify-center gap-3 mt-12"
           >
             {[
-              { icon: ImageIcon, label: 'Images', color: 'text-blue-400' },
-              { icon: Video, label: 'Video', color: 'text-purple-400' },
-              { icon: Music, label: 'Audio', color: 'text-pink-400' },
               { icon: FileText, label: 'PDF / DOCX', color: 'text-emerald-400' },
+              { icon: Presentation, label: 'PPTX / PPT', color: 'text-purple-400' },
+              { icon: Table2, label: 'XLSX / CSV', color: 'text-amber-400' },
+              { icon: ImageIcon, label: 'Images', color: 'text-blue-400' },
             ].map(({ icon: Icon, label, color }) => (
               <div
                 key={label}
@@ -210,13 +211,13 @@ export default function Landing() {
                 color: 'text-blue-400',
                 bg: 'bg-blue-500/10',
                 border: 'border-blue-500/20',
-                headline: 'Screen out synthetic candidates',
-                desc: 'Detect AI-generated portfolio images, synthetic voice samples in audio interviews, and deepfake video submissions before they reach a hiring manager.',
+                headline: 'Screen out AI-written applications',
+                desc: 'Detect AI-generated CVs, cover letters, and presentation decks before they reach a hiring manager. 12+ signals: template placeholders, buzzword density, skill list inflation, achievement claim patterns, and more.',
                 bullets: [
+                  'CV & cover letter AI detection',
+                  'PPTX presentation analysis',
+                  'Template placeholder detection',
                   'Portfolio photo authenticity check',
-                  'Voice sample origin detection',
-                  'Video interview deepfake analysis',
-                  'Resume photo verification',
                 ],
               },
               {

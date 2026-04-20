@@ -1,8 +1,8 @@
 import { useCallback, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Upload, ImageIcon, Video, Music, FileText, AlertCircle } from 'lucide-react'
+import { Upload, ImageIcon, FileText, Table2, Presentation, AlertCircle } from 'lucide-react'
 
-const ACCEPT = '.jpg,.jpeg,.png,.webp,.gif,.tiff,.bmp,.heic,.mp4,.mov,.avi,.webm,.mkv,.mp3,.wav,.ogg,.flac,.aac,.m4a,.pdf,.docx,.doc'
+const ACCEPT = '.jpg,.jpeg,.png,.webp,.gif,.tiff,.bmp,.heic,.pdf,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.csv'
 const MAX_MB = 100
 
 interface Props {
@@ -73,16 +73,16 @@ export default function UploadZone({ onFile }: Props) {
               {dragging ? 'Drop to analyze' : 'Drop a file or click to upload'}
             </p>
             <p className="text-sm text-slate-500">
-              Supports images, video, audio, PDF, and DOCX · Max {MAX_MB} MB
+              CV, cover letter, presentation, spreadsheet, or image · Max {MAX_MB} MB
             </p>
           </div>
 
           <div className="flex flex-wrap justify-center gap-2">
             {[
-              { icon: ImageIcon, label: 'JPG / PNG / WebP', color: 'text-blue-400' },
-              { icon: Video, label: 'MP4 / MOV', color: 'text-purple-400' },
-              { icon: Music, label: 'MP3 / WAV / FLAC', color: 'text-pink-400' },
               { icon: FileText, label: 'PDF / DOCX', color: 'text-emerald-400' },
+              { icon: Presentation, label: 'PPTX / PPT', color: 'text-purple-400' },
+              { icon: Table2, label: 'XLSX / CSV', color: 'text-amber-400' },
+              { icon: ImageIcon, label: 'JPG / PNG', color: 'text-blue-400' },
             ].map(({ icon: Icon, label, color }) => (
               <div
                 key={label}
@@ -120,25 +120,25 @@ export default function UploadZone({ onFile }: Props) {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
         {[
           {
-            icon: ImageIcon,
-            title: 'AI Portrait Check',
-            desc: 'Detect Midjourney, DALL-E, and Stable Diffusion generated faces.',
-            color: 'text-blue-400',
-            bg: 'bg-blue-500/10',
-          },
-          {
             icon: FileText,
-            title: 'Essay Authenticity',
-            desc: 'Score burstiness, TTR, and AI phrase density in DOCX or PDF.',
+            title: 'CV / Cover Letter',
+            desc: 'Detect AI-generated CVs via buzzword density, template placeholders, and achievement claim patterns.',
             color: 'text-emerald-400',
             bg: 'bg-emerald-500/10',
           },
           {
-            icon: Music,
-            title: 'Voice Clone Detection',
-            desc: 'Identify synthetic audio from ElevenLabs, Bark, and similar tools.',
-            color: 'text-pink-400',
-            bg: 'bg-pink-500/10',
+            icon: Presentation,
+            title: 'Presentation Decks',
+            desc: 'Detect AI-written PPTX slide decks via structural uniformity, generic titles, and language patterns.',
+            color: 'text-purple-400',
+            bg: 'bg-purple-500/10',
+          },
+          {
+            icon: ImageIcon,
+            title: 'Portfolio Photos',
+            desc: 'Detect AI-generated profile images via ELA, noise analysis, and neural network classification.',
+            color: 'text-blue-400',
+            bg: 'bg-blue-500/10',
           },
         ].map(item => (
           <div key={item.title} className="card p-5">
