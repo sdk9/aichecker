@@ -4,8 +4,8 @@ import { motion } from 'framer-motion'
 import axios from 'axios'
 import {
   Users, TrendingUp, DollarSign, Activity, Search, ChevronLeft, ChevronRight,
-  Shield, ShieldOff, Trash2, RefreshCw, BarChart2, UserCheck, UserX, Crown,
-  AlertTriangle, CheckCircle, Clock, Filter,
+  Shield, Trash2, RefreshCw, BarChart2, UserCheck, UserX, Crown,
+  AlertTriangle, CheckCircle, Clock, Filter, Eye, Globe,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 
@@ -25,6 +25,10 @@ interface Stats {
   }
   scans: { total_all_time: number; this_month: number }
   revenue: { monthly_mrr_cents: number; monthly_mrr_usd: number }
+  visitors: {
+    today: number; last_7d: number; last_30d: number
+    pageviews_today: number; pageviews_total: number
+  }
 }
 
 interface UserRow {
@@ -64,6 +68,7 @@ export default function Admin() {
   const [stats, setStats] = useState<Stats | null>(null)
   const [userList, setUserList] = useState<UserList | null>(null)
   const [signups, setSignups] = useState<Signup[]>([])
+  const [visitors, setVisitors] = useState<{ date: string; visitors: number }[]>([])
   const [activity, setActivity] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -81,18 +86,20 @@ export default function Admin() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [s, u, sg, a] = await Promise.all([
+      const [s, u, sg, v, a] = await Promise.all([
         axios.get(`${API}/api/admin/stats`, { headers }),
         axios.get(`${API}/api/admin/users`, {
           params: { page, per_page: 50, search: search || undefined, plan: planFilter || undefined },
           headers,
         }),
         axios.get(`${API}/api/admin/signups/daily`, { params: { days: 30 }, headers }),
+        axios.get(`${API}/api/admin/visitors/daily`, { params: { days: 30 }, headers }),
         axios.get(`${API}/api/admin/activity`, { params: { limit: 20 }, headers }),
       ])
       setStats(s.data)
       setUserList(u.data)
       setSignups(sg.data)
+      setVisitors(v.data)
       setActivity(a.data)
       setError('')
     } catch (e: any) {
@@ -190,7 +197,16 @@ export default function Admin() {
         {tab === 'overview' && stats && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
 
-            {/* KPI grid */}
+            {/* Visitor KPIs */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+              <StatCard icon={Globe} label="Visitors Today" value={stats.visitors?.today ?? 0} color="text-cyan-400"
+                sub={`${stats.visitors?.pageviews_today ?? 0} page views`} />
+              <StatCard icon={Eye} label="Visitors (7 days)" value={stats.visitors?.last_7d ?? 0} color="text-teal-400" />
+              <StatCard icon={TrendingUp} label="Visitors (30 days)" value={stats.visitors?.last_30d ?? 0} color="text-sky-400" />
+              <StatCard icon={BarChart2} label="Total Page Views" value={stats.visitors?.pageviews_total ?? 0} color="text-indigo-400" />
+            </div>
+
+            {/* User KPI grid */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
               <StatCard icon={Users} label="Total Users" value={stats.users.total} sub={`+${stats.users.new_last_7d} this week`} />
               <StatCard icon={Crown} label="Pro Users" value={stats.users.pro} color="text-amber-400"
@@ -207,6 +223,31 @@ export default function Admin() {
               <StatCard icon={TrendingUp} label="New (30 days)" value={stats.users.new_last_30d} color="text-sky-400" />
               <StatCard icon={BarChart2} label="Stripe Accounts" value={stats.users.with_stripe}
                 sub="ever attempted upgrade" color="text-indigo-400" />
+            </div>
+
+            {/* Visitors chart */}
+            <div className="card p-6 mb-6">
+              <h2 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
+                <Globe className="w-4 h-4 text-cyan-400" /> Daily Unique Visitors (last 30 days)
+              </h2>
+              {visitors.length === 0 ? (
+                <p className="text-slate-500 text-sm">No visitor data yet — tracking starts now.</p>
+              ) : (
+                <div className="flex items-end gap-0.5 h-28">
+                  {(() => { const max = Math.max(...visitors.map(v => v.visitors), 1); return visitors.slice(-30).map(v => (
+                    <div key={v.date} className="flex-1 flex flex-col items-center gap-1 group relative">
+                      <div
+                        className="w-full bg-cyan-500/60 hover:bg-cyan-400 rounded-sm transition-colors cursor-pointer"
+                        style={{ height: `${Math.max((v.visitors / max) * 100, 4)}%` }}
+                        title={`${v.date}: ${v.visitors} visitor${v.visitors !== 1 ? 's' : ''}`}
+                      />
+                      <div className="absolute -top-7 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-xs px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap z-10 pointer-events-none">
+                        {v.date.slice(5)}: {v.visitors}
+                      </div>
+                    </div>
+                  ))})()}
+                </div>
+              )}
             </div>
 
             {/* Plan breakdown */}

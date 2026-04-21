@@ -29,4 +29,5 @@ def get_db():
 def init_db():
     """Create all tables."""
     from app.models.user import User  # noqa: F401 — registers the model
+    from app.models.page_view import PageView  # noqa: F401 — registers the model
     Base.metadata.create_all(bind=engine)

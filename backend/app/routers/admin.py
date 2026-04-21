@@ -2,17 +2,19 @@
 Admin router — /api/admin/*
 All endpoints require is_admin=True on the User model.
 """
+import hashlib
 import logging
 import os
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.user import User
+from app.models.page_view import PageView
 from app.routers.auth import _get_current_user
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,18 @@ def _require_admin(current_user: User = Depends(_get_current_user)) -> User:
     if current_user.email not in ADMIN_EMAILS and not getattr(current_user, "is_admin", False):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin access required")
     return current_user
+
+
+# ── Public page-view tracking ─────────────────────────────────────────────────
+
+@router.post("/track")
+async def track_pageview(request: Request, body: dict, db: Session = Depends(get_db)):
+    ip = request.client.host if request.client else "unknown"
+    ip_hash = hashlib.sha256(ip.encode()).hexdigest()[:16]
+    path = str(body.get("path", "/"))[:200]
+    db.add(PageView(path=path, ip_hash=ip_hash))
+    db.commit()
+    return {"ok": True}
 
 
 # ── Overview stats ────────────────────────────────────────────────────────────
@@ -61,6 +75,16 @@ def get_stats(db: Session = Depends(get_db), _: User = Depends(_require_admin)):
         db.query(func.count(User.id)).filter(User.stripe_customer_id != None).scalar()
     )
 
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=7)
+    month_start = today_start - timedelta(days=30)
+
+    visitors_today = db.query(func.count(func.distinct(PageView.ip_hash))).filter(PageView.created_at >= today_start).scalar() or 0
+    visitors_7d = db.query(func.count(func.distinct(PageView.ip_hash))).filter(PageView.created_at >= week_start).scalar() or 0
+    visitors_30d = db.query(func.count(func.distinct(PageView.ip_hash))).filter(PageView.created_at >= month_start).scalar() or 0
+    pageviews_today = db.query(func.count(PageView.id)).filter(PageView.created_at >= today_start).scalar() or 0
+    pageviews_total = db.query(func.count(PageView.id)).scalar() or 0
+
     return {
         "users": {
             "total": total_users,
@@ -80,6 +104,13 @@ def get_stats(db: Session = Depends(get_db), _: User = Depends(_require_admin)):
         "revenue": {
             "monthly_mrr_cents": pro_users * 499 + enterprise_users * 0,
             "monthly_mrr_usd": round((pro_users * 499) / 100, 2),
+        },
+        "visitors": {
+            "today": visitors_today,
+            "last_7d": visitors_7d,
+            "last_30d": visitors_30d,
+            "pageviews_today": pageviews_today,
+            "pageviews_total": pageviews_total,
         },
     }
 
@@ -225,6 +256,26 @@ def signups_daily(
 
     sorted_days = sorted(buckets.items())
     return [{"date": d, "signups": c} for d, c in sorted_days]
+
+
+# ── Daily visitors chart ──────────────────────────────────────────────────────
+
+@router.get("/visitors/daily")
+def visitors_daily(
+    days: int = Query(30, ge=7, le=90),
+    db: Session = Depends(get_db),
+    _: User = Depends(_require_admin),
+):
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = db.query(PageView).filter(PageView.created_at >= cutoff).all()
+
+    buckets: dict[str, set] = {}
+    for pv in rows:
+        day = pv.created_at.strftime("%Y-%m-%d") if pv.created_at else "unknown"
+        buckets.setdefault(day, set()).add(pv.ip_hash)
+
+    sorted_days = sorted(buckets.items())
+    return [{"date": d, "visitors": len(ips)} for d, ips in sorted_days]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

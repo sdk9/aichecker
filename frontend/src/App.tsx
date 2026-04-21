@@ -1,5 +1,20 @@
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, useLocation } from 'react-router-dom'
+import { useEffect } from 'react'
 import { AuthProvider } from './context/AuthContext'
+
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
+function PageTracker() {
+  const location = useLocation()
+  useEffect(() => {
+    fetch(`${API}/api/admin/track`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: location.pathname }),
+    }).catch(() => {})
+  }, [location.pathname])
+  return null
+}
 import Layout from './components/Layout'
 import Landing from './pages/Landing'
 import Analyze from './pages/Analyze'
@@ -19,6 +34,7 @@ import AIWritingDetector from './pages/AIWritingDetector'
 export default function App() {
   return (
     <AuthProvider>
+      <PageTracker />
       <Routes>
         {/* Full-page auth routes (no layout) */}
         <Route path="/login" element={<Login />} />
