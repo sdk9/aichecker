@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Navigate, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
@@ -25,6 +25,15 @@ export default function Account() {
 
   const searchParams = new URLSearchParams(window.location.search)
   const upgraded = searchParams.get('upgrade') === 'success'
+
+  useEffect(() => {
+    if (upgraded && token) {
+      refreshUser()
+      axios.post(`${API}/api/billing/verify-subscription`, {}, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then(() => refreshUser()).catch(() => {})
+    }
+  }, [upgraded, token])
 
   if (!user) return <Navigate to="/login" replace />
 

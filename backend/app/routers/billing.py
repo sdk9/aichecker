@@ -119,6 +119,37 @@ def create_checkout(
     return {"url": session.url}
 
 
+@router.post("/verify-subscription")
+def verify_subscription(
+    current_user: User = Depends(_get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Check Stripe for an active subscription and sync the user's plan."""
+    if not stripe.api_key or not stripe.api_key.startswith("sk_"):
+        return {"plan": current_user.plan, "synced": False}
+
+    customer_id = current_user.stripe_customer_id
+    if not customer_id:
+        customers = stripe.Customer.list(email=current_user.email, limit=1)
+        if customers.data:
+            customer_id = customers.data[0].id
+            current_user.stripe_customer_id = customer_id
+            db.commit()
+
+    if not customer_id:
+        return {"plan": current_user.plan, "synced": False}
+
+    subs = stripe.Subscription.list(customer=customer_id, status="active", limit=5)
+    if subs.data:
+        sub = subs.data[0]
+        _update_subscription(sub, db)
+        db.refresh(current_user)
+        logger.info("Verified subscription for user %s → %s", current_user.email, current_user.plan)
+        return {"plan": current_user.plan, "synced": True}
+
+    return {"plan": current_user.plan, "synced": False}
+
+
 @router.post("/portal")
 def customer_portal(
     current_user: User = Depends(_get_current_user),
