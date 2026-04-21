@@ -27,7 +27,7 @@ export default function Analyze() {
     },
   })
 
-  const { user } = useAuth()
+  const { user, token } = useAuth()
   const [stage, setStage] = useState<Stage>('upload')
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -66,7 +66,10 @@ export default function Analyze() {
       formData.append('file', file)
 
       const response = await axios.post<AnalysisResult>('/api/analyze', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+        headers: {
+          'Content-Type': 'multipart/form-data',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         signal: abortRef.current.signal,
       })
 
@@ -86,7 +89,7 @@ export default function Analyze() {
       setError(msg)
       setStage('upload')
     }
-  }, [])
+  }, [token])
 
   const reset = useCallback(() => {
     abortRef.current?.abort()
